@@ -1,0 +1,80 @@
+name: Build APK
+
+# Chỉ build KHUNG app (Kotlin). Giao diện (web/) và chức năng (engine/) app tự tải từ nhánh main.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "engine/**", "web/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # cần lịch sử + tag để viết danh sách thay đổi
+          fetch-tags: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Phiên bản
+        run: |
+          VER=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          if git rev-parse "v$VER" >/dev/null 2>&1; then
+            echo "EXISTS=1" >> "$GITHUB_ENV"
+            echo "::notice::Đã có release v$VER — tăng appVersion trong gradle.properties để phát hành bản khung mới"
+          fi
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --console=plain
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk "dist/AudioYtDl-${VER}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AudioYtDl-${{ env.VER }}-build${{ github.run_number }}
+          path: dist/*.apk
+          compression-level: 0
+
+      - name: Danh sách thay đổi
+        if: env.EXISTS != '1'
+        run: |
+          PREV=$(git tag --list 'v*' --sort=-creatordate | head -1)
+          RANGE="${PREV:+$PREV..}HEAD"
+          {
+            echo "## Thay đổi${PREV:+ kể từ $PREV}"
+            echo
+            git log --no-merges --reverse --format='### %s%n%b' "$RANGE" \
+              | grep -v -E '^(Co-Authored-By|Claude-Session):' | cat -s
+            echo
+            echo "---"
+            echo "Cài: tải **AudioYtDl-${VER}.apk** bên dưới. Giao diện và chức năng tự cập nhật từ GitHub, không cần cài lại."
+          } > notes.md
+          cat notes.md
+
+      - name: Release
+        if: env.EXISTS != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${VER}" dist/*.apk \
+            --target "${{ github.sha }}" \
+            --title "Audio YtDl ${VER}" \
+            --notes-file notes.md \
+            --latest

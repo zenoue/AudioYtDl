@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Audio YtDl</title>
+<!--
+  GIAO DIỆN Audio YtDl — tải từ GitHub mỗi lần mở app (UI_API = 1).
+  Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
+  Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
+-->
+<script>const UI_API = 1, UI_VERSION = "0.0.1";</script>
+<style>
+:root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.35 system-ui,Roboto,sans-serif}
+body{display:flex;flex-direction:column;padding:8px 12px 12px}
+header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+header h1{font-size:19px;font-weight:600;margin:0;flex:1}
+header .ver{color:var(--dim);font-size:12px;padding:6px 4px;cursor:pointer}
+.tabs{display:flex;gap:6px;margin-bottom:8px}
+.tabs button{flex:1;background:#0d0d0d;border:1px solid var(--line);color:var(--dim);padding:7px;border-radius:8px;font-size:13px}
+.tabs button.on{color:#fff;border-color:var(--acc);background:var(--acc2)}
+.f{position:relative;flex:1;min-width:0}
+.f input{width:100%;background:#000;border:1px solid var(--line);border-radius:8px;color:var(--text);padding:15px 8px 5px;font-size:14px;text-align:center;outline:none}
+.f input.l{text-align:left}
+.f input:focus{border-color:var(--acc)}
+.f label{position:absolute;left:8px;top:3px;font-size:10.5px;color:var(--dim);pointer-events:none}
+.row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.thumb{width:44px;height:44px;border-radius:6px;background:#1a1a1a center/cover no-repeat;border:1px solid var(--line);flex:none}
+.small{font-size:12px;color:var(--dim)}
+.link{background:none;border:0;color:var(--acc);font-size:12px;padding:6px 4px}
+.x{background:none;border:0;color:var(--dim);font-size:16px;padding:4px 6px}
+.btn{background:var(--acc);color:#fff;border:0;border-radius:22px;padding:11px;font-size:15px;font-weight:600;flex:1}
+.btn.stop{background:#555}
+.btn2{background:none;border:1px solid var(--line);color:var(--text);border-radius:22px;padding:10px 14px;font-size:13px}
+.bar{height:4px;background:#1e1e1e;border-radius:2px;margin-top:8px;overflow:hidden}
+.bar>div{height:100%;width:0;background:var(--acc);transition:width .3s}
+#status{font-weight:600;font-size:13px;margin-top:5px;min-height:18px}
+.log{flex:1;min-height:120px;margin-top:8px;background:var(--card);border:1px solid #222;border-radius:10px;padding:10px;overflow:auto;
+  font:11px/1.45 ui-monospace,Menlo,monospace;color:#b5b5b5;white-space:pre-wrap;word-break:break-word;user-select:text}
+.hide{display:none!important}
+button:disabled,input:disabled{opacity:.4}
+.radio{display:flex;gap:12px;font-size:13px;margin-top:6px}
+.radio label{display:flex;gap:4px;align-items:center}
+.radio input{accent-color:var(--acc)}
+details{margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:0 8px}
+details[open]{padding-bottom:8px}
+summary{padding:8px 0;font-size:13px;color:var(--text);cursor:pointer;list-style:none}
+summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{content:"▾ "}
+.help{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+.help code{color:#d0d0d0;background:#1a1a1a;padding:0 3px;border-radius:3px}
+</style>
+</head>
+<body>
+<header><h1>Audio YtDl</h1><span class="ver" id="ver" title="Kiểm tra cập nhật"></span></header>
+<div class="tabs"><button id="tabDl" class="on">Tải playlist</button><button id="tabTag">Sửa tag file</button></div>
+
+<!-- ============ TAB TẢI ============ -->
+<section id="pDl">
+  <div class="row" style="margin-top:0"><div class="f"><label>Link playlist / video</label><input id="url" class="l" inputmode="url" autocomplete="off"></div><button class="x" id="urlClr">✕</button></div>
+  <div class="row">
+    <div class="f"><label>Từ video</label><input id="from" inputmode="numeric"></div>
+    <div class="f"><label>Số video</label><input id="count" inputmode="numeric"></div>
+    <div class="f"><label>Gộp N</label><input id="group" inputmode="numeric"></div>
+  </div>
+  <div class="row">
+    <div class="f"><label>Cắt đầu</label><input id="trimStart"></div>
+    <div class="f"><label>Cắt cuối</label><input id="trimEnd"></div>
+    <div class="f"><label>Tốc độ</label><input id="speed" inputmode="decimal"></div>
+  </div>
+  <div class="row">
+    <span class="small" style="flex:1">Định dạng: M4A (AAC)</span>
+    <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
+  </div>
+  <details id="meta">
+    <summary>Thông tin sách (metadata audiobook)</summary>
+    <div class="row"><div class="f"><label>Tên sách → Album (dùng được biến, vd: {playlist} {phan})</label><input id="bookTpl" class="l" placeholder="{playlist}"></div></div>
+    <div class="row"><div class="f"><label>Tác giả → Album Artist + Artist</label><input id="authorTpl" class="l" placeholder="{kenh}"></div></div>
+    <div class="row"><div class="f"><label>Thể loại → Genre</label><input id="genre" class="l" placeholder="Audiobook"></div></div>
+    <div class="row"><div class="f" style="flex:3"><label>Tên file</label><input id="nameTpl" class="l" placeholder="{sach}_{phan}_v{tu}-{den}"></div>
+      <div class="f"><label>Đếm phần từ</label><input id="partStart" inputmode="numeric" placeholder="1"></div></div>
+    <div class="help">Để trống = mặc định (chữ mờ). Mỗi phần tự có tên <code>{phan}. {ten}</code> và số thứ tự phần/tổng để trình phát xếp đúng.
+      <b>Đếm phần từ</b>: số của phần đầu tiên (vd đã có phần 1–5 thì nhập 6 để chạy tiếp).
+      Biến dùng được cho <b>Tên sách, Tác giả, Tên file</b>: <code>{playlist}</code> tên playlist · <code>{kenh}</code> tên kênh ·
+      <code>{tac_gia}</code> tác giả · <code>{phan}</code> số phần (01, 02…) · <code>{tong}</code> tổng số phần ·
+      <code>{tu}</code>/<code>{den}</code> số video đầu/cuối · <code>{ten}</code> tên video đầu → cuối · <code>{ten_dau}</code> · <code>{ten_cuoi}</code> · <code>{ngay}</code>.
+      Tên file còn có <code>{sach}</code> (tên sách sau khi thay biến).
+      <div id="preview" style="margin-top:6px;color:#bbb"></div>
+    </div>
+    <div class="row"><button class="link" id="metaReset">Đặt lại mặc định</button></div>
+  </details>
+  <div class="row"><span class="small" id="saveLbl" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><button class="x hide" id="saveClr">✕</button><button class="link" id="savePick">Đổi thư mục</button></div>
+  <div class="row"><button class="btn" id="run">Bắt đầu</button></div>
+</section>
+
+<!-- ============ TAB SỬA TAG ============ -->
+<section id="pTag" class="hide">
+  <div class="row" style="margin-top:0"><button class="btn2" id="tagPick" style="flex:1">1. Chọn file audio</button></div>
+  <div class="small" id="tagName" style="margin-top:4px"></div>
+  <div class="small" style="margin-top:8px">2. Ảnh bìa lấy từ</div>
+  <div class="radio">
+    <label><input type="radio" name="cs" value="yt" checked>Link YouTube</label>
+    <label><input type="radio" name="cs" value="image">Ảnh trong máy</label>
+    <label><input type="radio" name="cs" value="keep">Giữ nguyên</label>
+  </div>
+  <div class="row" id="tagYt"><div class="f" style="flex:3"><label>Link video / playlist</label><input id="tagLink" class="l"></div><div class="f"><label>Video số</label><input id="tagIdx" inputmode="numeric" value="1"></div></div>
+  <div class="row hide" id="tagImgRow"><button class="btn2" id="tagImg">Chọn ảnh</button></div>
+  <div class="row"><div class="thumb" id="tagPrev" style="width:120px;height:68px"></div></div>
+  <div class="small" style="margin-top:8px">3. Thông tin</div>
+  <div class="row"><div class="f"><label>Tên phần / chương → Title</label><input id="tTitle" class="l"></div></div>
+  <div class="row"><div class="f"><label>Tên sách → Album</label><input id="tAlbum" class="l"></div></div>
+  <div class="row"><div class="f"><label>Tác giả → Album Artist + Artist</label><input id="tArtist" class="l"></div></div>
+  <div class="row"><div class="f" style="flex:3"><label>Thể loại → Genre</label><input id="tGenre" class="l" placeholder="Audiobook"></div><div class="f"><label>Số thứ tự</label><input id="tTrack"></div></div>
+  <div class="row"><button class="btn" id="tagRun">Ghi vào file</button></div>
+</section>
+
+<div class="bar"><div id="bar"></div></div>
+<div id="status"></div>
+<div class="log" id="log" data-ph="Nhật ký"></div>
+
+<script>
+const A = window.App || {   // chạy thử trên trình duyệt máy tính
+  prefGet: () => "", prefSet: () => {}, run: p => console.log("run", p), stop: () => {}, pick: () => {},
+  info: () => '{"app":"dev"}', toast: m => alert(m), checkUpdate: () => {}
+};
+const $ = id => document.getElementById(id);
+const P = Object.assign({url:"", from:"1", count:"10", group:"10", trimStart:"10", trimEnd:"30", speed:"1.25",
+  cover:"", coverPreview:"", saveTree:"", saveLabel:""}, JSON.parse(A.prefGet("ui") || "{}"));
+const save = () => A.prefSet("ui", JSON.stringify(P));
+let running = false;
+
+// ---- phiên bản: bấm để kiểm tra cập nhật app
+const info = JSON.parse(A.info() || "{}");
+$("ver").textContent = (info.app || "") + " · UI " + UI_VERSION + " ⟳";
+$("ver").onclick = () => A.checkUpdate();
+
+// ---- tab
+function tab(t){ $("pDl").classList.toggle("hide", t!=="dl"); $("pTag").classList.toggle("hide", t!=="tag");
+  $("tabDl").classList.toggle("on", t==="dl"); $("tabTag").classList.toggle("on", t==="tag"); }
+$("tabDl").onclick = () => tab("dl");
+$("tabTag").onclick = () => { if (!$("tagLink").value) $("tagLink").value = P.url; tab("tag"); };
+
+// ---- tab tải: ràng buộc ô nhập với prefs
+for (const k of ["url","from","count","group","trimStart","trimEnd","speed"]) {
+  $(k).value = P[k]; $(k).oninput = () => { P[k] = $(k).value.trim(); save(); };
+}
+// ---- thông tin sách (Tên sách -> album, Tác giả -> album_artist + artist, Thể loại -> genre)
+const META = ["bookTpl","authorTpl","genre","nameTpl","partStart"];
+const DEST = "Download/Audio";
+function preview(){
+  const r0 = (t, v) => t.replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m);
+  const base = {playlist:"Tên playlist", kenh:"Tên kênh"};
+  const tac_gia = r0(P.authorTpl || "{kenh}", base);
+  const p0 = partStart(), pad = n => String(n).padStart(2, "0");
+  const v = {...base, tac_gia, phan:pad(p0), tong:pad(p0 + 4), tu:P.from||1, den:(parseInt(P.from)||1) + (parseInt(P.group)||10) - 1,
+    ten:"Tập 1 → Tập 10", ten_dau:"Tập 1", ten_cuoi:"Tập 10", ngay:new Date().toISOString().slice(0,10)};
+  const sach = r0(P.bookTpl || "{playlist}", v); v.sach = sach;
+  $("preview").textContent = "Ví dụ: " + r0(P.nameTpl || $("nameTpl").placeholder, v) + ".m4a" +
+    "  ·  Sách: " + sach + "  ·  Tác giả: " + tac_gia + "  ·  Thể loại: " + (P.genre || "Audiobook");
+}
+for (const k of META) { $(k).value = P[k] || ""; $(k).oninput = () => { P[k] = $(k).value; save(); preview(); }; }
+$("metaReset").onclick = () => { for (const k of META) { $(k).value = P[k] = ""; } save(); preview(); };
+$("meta").ontoggle = preview;
+
+function partStart(){ const n = parseInt(P.partStart); return n >= 0 ? n : 1; }
+$("urlClr").onclick = () => { $("url").value = P.url = ""; save(); };
+
+function showCover(){ const c = !!P.cover; $("cover").style.backgroundImage = c && P.coverPreview ? `url(${P.coverPreview})` : "";
+  $("coverLbl").textContent = c ? "Ảnh riêng" : "Ảnh bìa"; $("coverClr").classList.toggle("hide", !c); }
+$("cover").onclick = () => !running && pick("image", r => { P.cover = r.path; P.coverPreview = r.preview || ""; save(); showCover(); });
+$("coverClr").onclick = () => { P.cover = ""; P.coverPreview = ""; save(); showCover(); };
+
+function showSave(){ $("saveLbl").textContent = "Lưu vào: " + (P.saveTree ? P.saveLabel : DEST); $("saveClr").classList.toggle("hide", !P.saveTree); }
+$("savePick").onclick = () => !running && pick("folder", r => { P.saveTree = r.uri; P.saveLabel = r.label; save(); showSave(); });
+$("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSave(); };
+
+function sync(){
+  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META]) $(id).disabled = running;
+  $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
+}
+const secs = s => String(s||"0").trim().split(":").reduce((a,x) => a*60 + (parseFloat(x)||0), 0);
+
+$("run").onclick = () => {
+  if (running) return A.stop();
+  if (!/^https?:\/\//.test(P.url)) return A.toast("Dán link YouTube trước");
+  const speed = parseFloat(String(P.speed).replace(",", "."));
+  if (!(speed >= 0.5 && speed <= 4)) return A.toast("Tốc độ nên trong khoảng 0.5 – 4");
+  A.run(JSON.stringify({ mode:"playlist", url:P.url, from:parseInt(P.from)||1, count:parseInt(P.count)||0,
+    group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
+    cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || DEST,
+    nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", partStart:partStart() }));
+};
+
+// ---- tab sửa tag
+let T = {};
+document.querySelectorAll('input[name=cs]').forEach(r => r.onchange = () => {
+  const v = document.querySelector('input[name=cs]:checked').value;
+  $("tagYt").classList.toggle("hide", v !== "yt"); $("tagImgRow").classList.toggle("hide", v !== "image"); });
+$("tagLink").value = P.url;
+$("tagPick").onclick = () => pick("audio", r => { T.file = r; $("tagName").textContent = r.name;
+  $("tTitle").value = r.title || r.name.replace(/\.[^.]+$/, ""); $("tAlbum").value = r.album || "";
+  $("tArtist").value = r.artist || ""; $("tTrack").value = r.track || "";
+  $("tagPrev").style.backgroundImage = r.preview ? `url(${r.preview})` : ""; });
+$("tagImg").onclick = () => pick("image", r => { T.img = r; $("tagPrev").style.backgroundImage = r.preview ? `url(${r.preview})` : ""; });
+$("tagRun").onclick = () => {
+  if (!T.file) return A.toast("Chọn file audio trước");
+  const cs = document.querySelector('input[name=cs]:checked').value;
+  if (cs === "image" && !T.img) return A.toast("Chọn ảnh trước");
+  if (cs === "yt" && !/^https?:\/\//.test($("tagLink").value)) return A.toast("Nhập link YouTube");
+  A.run(JSON.stringify({ mode:"tag", input:T.file.path, inputUri:T.file.uri, name:T.file.name, coverSource:cs,
+    link:$("tagLink").value.trim(), index:parseInt($("tagIdx").value)||1, coverPath:T.img ? T.img.path : "",
+    title:$("tTitle").value, album:$("tAlbum").value, artist:$("tArtist").value, track:$("tTrack").value,
+    ...($("tGenre").value.trim() ? {genre:$("tGenre").value.trim()} : {}),
+    saveTree:P.saveTree, saveLabel:P.saveLabel || DEST }));
+};
+
+// ---- chọn file qua app: kết quả trả về window.__onPick(id, obj)
+const picks = {}; let pickId = 0;
+function pick(kind, cb){ const id = "p" + (++pickId); picks[id] = cb; A.pick(kind, id); }
+window.__onPick = (id, r) => { const cb = picks[id]; delete picks[id]; if (cb && r) cb(r); };
+
+// ---- trạng thái từ app (đang chạy, tiến độ, nhật ký)
+let lastLog = "";
+window.__onState = s => {
+  running = !!s.running; sync();
+  $("status").textContent = s.status || "";
+  $("bar").style.width = ((s.progress || 0) / 10) + "%";
+  if (s.log !== lastLog) { const el = $("log"), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    el.textContent = lastLog = s.log || ""; if (atEnd) el.scrollTop = el.scrollHeight; }
+};
+window.__onShare = text => { const m = /https?:\/\/\S+/.exec(text || ""); if (m && !running) { $("url").value = P.url = m[0]; save(); tab("dl"); } };
+
+showCover(); showSave(); sync();
+</script>
+</body>
+</html>
