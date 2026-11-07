@@ -27,7 +27,7 @@ class Updater(private val act: Activity, private val scope: LifecycleCoroutineSc
 
     /** "v1.2.3" / "1.2.3" -> [1,2,3] */
     private fun ver(v: String?): List<Int>? =
-        Regex("(\\d+)\\.(\\d+)\\.(\\d+)").find(v ?: return null)?.groupValues?.drop(1)?.map { it.toInt() }
+        v?.let { Regex("(\\d+)\\.(\\d+)\\.(\\d+)").find(it) }?.groupValues?.drop(1)?.map { it.toInt() }
 
     private fun newer(a: List<Int>, b: List<Int>): Boolean {
         for (i in 0 until 3) if (a[i] != b[i]) return a[i] > b[i]
