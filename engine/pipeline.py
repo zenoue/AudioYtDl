@@ -17,8 +17,8 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "addAd" (lấy mẫu quảng cáo từ 1 khoảng thời gian của video YouTube)
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
-ENGINE_API = 2          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.1"
+ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
+ENGINE_VERSION = "0.0.2"
 
 import hashlib
 import json
@@ -420,8 +420,8 @@ def find_matches(e, t, thr):
 
 
 def ads_dir():
-    """Thư viện mẫu (lưu lâu dài cạnh cache yt-dlp, không bị dọn khi chạy)."""
-    d = os.path.join(os.path.dirname(P["cache"].rstrip("/")), "ads")
+    """Thư viện mẫu do app chọn (Download/AudioYtDl/Mẫu quảng cáo, có .nomedia). Mỗi file audio = 1 mẫu."""
+    d = P["ads"]
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -429,10 +429,10 @@ def ads_dir():
 def load_templates(speed=1.0):
     """Đường năng lượng các mẫu đã chọn (bỏ khoảng lặng 2 đầu). speed: tốc độ của file sẽ đem so."""
     temps = []
-    for aid in P.get("adIds") or []:
-        f = os.path.join(ads_dir(), re.sub(r"[^\w-]", "", str(aid)) + ".m4a")
+    for name in P.get("adIds") or []:
+        f = os.path.join(ads_dir(), os.path.basename(str(name)))
         if not os.path.exists(f):
-            log("Không thấy mẫu %s (đã xoá?) — bỏ qua" % aid); continue
+            log("Không thấy mẫu \"%s\" (đã xoá?) — bỏ qua" % name); continue
         ev = envelope(f, speed=speed)
         while ev and ev[0] < -62: ev.pop(0)
         while ev and ev[-1] < -62: ev.pop()
@@ -523,8 +523,8 @@ def fetch_audio(link, index, wdir):
 
 
 def add_ad_mode():
-    """Lấy mẫu quảng cáo = đoạn [start, end] của 1 video YouTube -> lưu vào thư viện mẫu."""
-    aid = re.sub(r"[^\w-]", "", str(P.get("id") or int(time.time())))
+    """Lấy mẫu quảng cáo = đoạn [start, end] của 1 video YouTube -> lưu vào thư viện mẫu (tên file = tên mẫu)."""
+    name = sanitize(os.path.splitext(os.path.basename(str(P.get("file") or "")))[0])[:80] + ".m4a"
     ss, to = float(P.get("start") or 0), float(P.get("end") or 0)
     if to - ss < 2: raise RuntimeError("Đoạn mẫu phải dài ít nhất 2 giây (Đến > Từ)")
     wdir = os.path.join(P["work"], "sample")
@@ -537,13 +537,13 @@ def add_ad_mode():
     log("Audio: %s (%.1fs)" % (title, secs(t0)))
     dur = probe(src)[0]
     if dur and to > dur: raise RuntimeError("Video chỉ dài %s, đoạn mẫu vượt quá" % fmt_t(dur))
-    out = os.path.join(ads_dir(), aid + ".m4a")
+    out = os.path.join(ads_dir(), name)
     ffmpeg(["-ss", "%.3f" % ss, "-to", "%.3f" % to, "-i", src, "-vn", "-ac", "1", "-ar", "16000",
             "-c:a", "aac", "-b:a", "48k", out])
     if sum(1 for x in envelope(out) if x > -50) * AHOP < 1.5:
         os.remove(out)
         raise RuntimeError("Đoạn mẫu gần như im lặng, kiểm tra lại thời gian")
-    log("Đã lưu mẫu \"%s\": %s–%s (%.1f giây) của %s" % (P.get("label") or aid, fmt_t(ss), fmt_t(to), to - ss, title))
+    log("Đã lưu mẫu \"%s\": %s–%s (%.1f giây) của %s" % (name, fmt_t(ss), fmt_t(to), to - ss, title))
     progress(1.0)
 
 

@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Audio YtDl</title>
 <!--
-  GIAO DIỆN Audio YtDl — tải từ GitHub mỗi lần mở app (UI_API = 1).
+  GIAO DIỆN Audio YtDl — tải từ GitHub mỗi lần mở app (UI_API = 2).
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 1, UI_VERSION = "0.0.1";</script>
+<script>const UI_API = 2, UI_VERSION = "0.0.2";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -111,6 +111,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
   <div class="help">Xem video trên YouTube, ghi lại thời điểm bắt đầu – kết thúc của đoạn quảng cáo (nên 5–30 giây, đúng nguyên đoạn).
     Link playlist thì nhập thêm số thứ tự video. App tải audio video đó rồi cắt đoạn làm mẫu.</div>
   <h3>2. Thư viện mẫu <span class="small" id="adCount"></span></h3>
+  <div class="help" id="adDir"></div>
   <div id="adList"></div>
   <div class="row"><div class="f" style="flex:none;width:130px"><label>Độ giống tối thiểu %</label><input id="adMatch" inputmode="numeric"></div>
     <span class="small" style="flex:1">Mẫu được tích sẽ dùng khi tải playlist và khi cắt file. Cắt nhầm thì tăng, sót thì giảm (75–95).</span></div>
@@ -152,11 +153,11 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
 <script>
 const A = window.App || {   // chạy thử trên trình duyệt máy tính
   prefGet: () => "", prefSet: () => {}, run: p => console.log("run", p), stop: () => {}, pick: () => {},
-  info: () => '{"app":"dev"}', toast: m => alert(m), checkUpdate: () => {}, adFiles: () => "null", adDelete: () => {}
+  info: () => '{"app":"dev"}', toast: m => alert(m), checkUpdate: () => {}, adFiles: () => "[]", adDelete: () => {}
 };
 const $ = id => document.getElementById(id);
 const P = Object.assign({url:"", from:"1", count:"10", group:"10", trimStart:"10", trimEnd:"30", speed:"1.25",
-  cover:"", coverPreview:"", saveTree:"", saveLabel:"", ads:[], adMatch:"85"}, JSON.parse(A.prefGet("ui") || "{}"));
+  cover:"", coverPreview:"", saveTree:"", saveLabel:"", adOff:[], adInfo:{}, adMatch:"85"}, JSON.parse(A.prefGet("ui") || "{}"));
 const save = () => A.prefSet("ui", JSON.stringify(P));
 let running = false;
 
@@ -225,28 +226,37 @@ $("run").onclick = () => {
     ...adParams() }));
 };
 
-// ---- mẫu quảng cáo: engine "addAd" lưu mẫu vào thư viện của app (filesDir/ads), "cutAds" cắt trong 1 file
-const adOn = () => P.ads.filter(a => a.on);
-const adParams = () => ({adIds:adOn().map(a => a.id), adMatch:Math.min(99, Math.max(50, parseInt(P.adMatch) || 85))});
+// ---- mẫu quảng cáo: thư viện = thư mục mẫu (mỗi file audio 1 mẫu, tên file = tên mẫu).
+// engine "addAd" lưu mẫu mới vào đó, "cutAds" cắt trong 1 file. Prefs chỉ giữ mẫu bị bỏ tích + ghi chú.
+let lib = [];
+const adOn = () => lib.filter(n => !P.adOff.includes(n));
+const adParams = () => ({adIds:adOn(), adMatch:Math.min(99, Math.max(50, parseInt(P.adMatch) || 85))});
+const fname = s => (s.replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim() || "audio").slice(0, 80);  // = sanitize() của engine
+$("adDir").innerHTML = "Thư mục mẫu: <code></code>. Mở bằng MiXplorer để nghe thử, đổi tên, xoá, hoặc chép file audio bất kỳ vào làm mẫu. " +
+  "Có <code>.nomedia</code> nên app nghe nhạc không thấy các file này.";
+$("adDir").querySelector("code").textContent = info.adsDir || "bộ nhớ trong của app";
 function showAds(){
   const on = adOn().length;
-  $("adCount").textContent = P.ads.length ? `· ${on}/${P.ads.length} mẫu đang dùng` : "· chưa có mẫu";
+  $("adCount").textContent = lib.length ? `· ${on}/${lib.length} mẫu đang dùng` : "· chưa có mẫu";
   $("adUse").textContent = on ? `Cắt đoạn giống mẫu: ${on} mẫu` : "Không cắt đoạn giống mẫu";
   $("adList").innerHTML = "";
-  P.ads.forEach((a, i) => {
+  for (const n of lib) {
     const row = document.createElement("div"); row.className = "row";
     row.innerHTML = `<label class="chk" style="flex:1"><input type="checkbox"><span></span> <span class="small"></span></label><button class="x">✕</button>`;
-    row.querySelector("span").textContent = a.label; row.querySelector(".small").textContent = a.info || "";
-    const cb = row.querySelector("input"); cb.checked = !!a.on; cb.disabled = running;
-    cb.onchange = () => { a.on = cb.checked; save(); showAds(); };
-    row.querySelector("button").onclick = () => { if (running) return; A.adDelete(a.id); P.ads.splice(i, 1); save(); showAds(); };
+    row.querySelector("span").textContent = n.replace(/\.m4a$/i, ""); row.querySelector(".small").textContent = P.adInfo[n] || "";
+    const cb = row.querySelector("input"); cb.checked = !P.adOff.includes(n); cb.disabled = running;
+    cb.onchange = () => { P.adOff = P.adOff.filter(x => x !== n); if (!cb.checked) P.adOff.push(n); save(); showAds(); };
+    const x = row.querySelector("button");   // bấm ✕ -> "Xoá?" -> bấm lần nữa mới xoá file
+    x.onclick = () => { if (running) return; if (x.textContent === "✕") { x.textContent = "Xoá?"; x.style.color = "var(--acc)"; }
+      else { A.adDelete(n); refreshAds(); } };
     $("adList").appendChild(row);
-  });
+  }
 }
-function refreshAds(){   // bỏ mẫu không có file (lấy mẫu lỗi / đã xoá)
-  const ids = JSON.parse(A.adFiles() || "null");
-  if (Array.isArray(ids)) { P.ads = P.ads.filter(a => ids.includes(a.id)); save(); }
-  showAds();
+function refreshAds(){   // đọc lại thư mục mẫu, dọn ghi chú của mẫu đã mất
+  lib = JSON.parse(A.adFiles() || "[]") || [];
+  P.adOff = P.adOff.filter(n => lib.includes(n));
+  for (const n in P.adInfo) if (!lib.includes(n)) delete P.adInfo[n];
+  delete P.ads; save(); showAds();
 }
 $("adMatch").value = P.adMatch; $("adMatch").oninput = () => { P.adMatch = $("adMatch").value.trim(); save(); };
 $("adAdd").onclick = () => {
@@ -255,13 +265,18 @@ $("adAdd").onclick = () => {
   if (!/^https?:\/\//.test(link)) return A.toast("Nhập link YouTube");
   const a = secs($("adFrom").value), b = secs($("adTo").value);
   if (!(b >= a + 2)) return A.toast("Đoạn mẫu phải dài ít nhất 2 giây (Đến > Từ)");
-  const idx = parseInt($("adIdx").value) || 1, id = "ad" + Date.now();
-  const label = $("adLabel").value.trim() || ("Mẫu " + (P.ads.length + 1));
-  P.ads.push({id, label, on:true, info:`${$("adFrom").value.trim()}–${$("adTo").value.trim()}` + (/list=/.test(link) ? ` · video ${idx}` : "")});
-  save(); showAds();
+  const idx = parseInt($("adIdx").value) || 1;
+  const base = fname($("adLabel").value.trim() || ("Mẫu " + (lib.length + 1)));
+  let file = base + ".m4a";
+  for (let i = 2; lib.includes(file); i++) file = `${base} (${i}).m4a`;
+  P.adInfo[file] = `${$("adFrom").value.trim()}–${$("adTo").value.trim()}` + (/list=/.test(link) ? ` · video ${idx}` : "");
+  save();
   for (const k of ["adFrom","adTo","adLabel"]) $(k).value = "";
-  A.run(JSON.stringify({mode:"addAd", link, index:idx, start:a, end:b, id, label}));
+  A.run(JSON.stringify({mode:"addAd", link, index:idx, start:a, end:b, file}));
 };
+// đọc lại thư mục khi mở tab / quay lại app (có thể vừa sửa bằng MiXplorer)
+$("tabAd").addEventListener("click", () => running || refreshAds());
+document.addEventListener("visibilitychange", () => document.hidden || running || refreshAds());
 let C = {};
 $("cutPick").onclick = () => pick("audio", r => { C.file = r; $("cutName").textContent = r.name; });
 $("cutRun").onclick = () => {

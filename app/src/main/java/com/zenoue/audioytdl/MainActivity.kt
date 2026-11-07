@@ -83,7 +83,7 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        if (Build.VERSION.SDK_INT <= 28 &&
+        if (Build.VERSION.SDK_INT <= 29 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 2)
 
@@ -200,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun info(): String = JSONObject().apply {
             put("app", runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "")
             put("ui", UiStore.source)
+            put("adsDir", if (AdStore.isPublic(this@MainActivity)) AdStore.LABEL else "bộ nhớ trong của app (không ghi được vào Download)")
         }.toString()
 
         @JavascriptInterface fun prefGet(key: String): String = prefs.getString(key, "") ?: ""
@@ -227,10 +228,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        /** Thư viện mẫu quảng cáo (engine lưu filesDir/ads/<id>.m4a): danh sách id có file / xoá 1 mẫu. */
-        @JavascriptInterface fun adFiles(): String =
-            org.json.JSONArray(File(filesDir, "ads").listFiles()?.map { it.nameWithoutExtension } ?: emptyList<String>()).toString()
-        @JavascriptInterface fun adDelete(id: String) { File(filesDir, "ads/${id.replace(Regex("[^\\w-]"), "")}.m4a").delete() }
+        /** Thư viện mẫu quảng cáo (AdStore): tên các file mẫu / xoá 1 mẫu. */
+        @JavascriptInterface fun adFiles(): String = org.json.JSONArray(AdStore.list(this@MainActivity)).toString()
+        @JavascriptInterface fun adDelete(name: String) = AdStore.delete(this@MainActivity, name)
 
         @JavascriptInterface fun toast(msg: String) = runOnUiThread { this@MainActivity.toast(msg) }
         @JavascriptInterface fun checkUpdate() = runOnUiThread { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
@@ -239,7 +239,7 @@ class MainActivity : AppCompatActivity() {
 
 /** Giao diện web: bản trên GitHub (main) -> bản đã lưu -> bản đóng gói trong APK. */
 object UiStore {
-    const val UI_API = 1
+    const val UI_API = 2
     const val URL_UI = "https://raw.githubusercontent.com/zenoue/AudioYtDl/main/web/index.html"
     @Volatile var source = "đóng gói"
 

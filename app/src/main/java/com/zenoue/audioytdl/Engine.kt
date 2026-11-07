@@ -73,6 +73,7 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
             put("cache", File(ctx.filesDir, "yt-dlp-cache").absolutePath)
             put("work", work.absolutePath)
             put("out", out.absolutePath)
+            put("ads", AdStore.dir(ctx).absolutePath)
         }
         val pf = File(ctx.cacheDir, "engine_params.json").apply { writeText(params.toString()) }
 
@@ -216,7 +217,7 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
 
     companion object {
         /** Phải khớp ENGINE_API trong engine/pipeline.py */
-        const val ENGINE_API = 2
+        const val ENGINE_API = 3
         const val ENGINE_URL = "https://raw.githubusercontent.com/zenoue/AudioYtDl/main/engine/pipeline.py"
     }
 }
