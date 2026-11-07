@@ -113,9 +113,11 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
                     val src = File(f[0])
                     val name = f.getOrElse(1) { src.name }
                     val target = f.getOrElse(3) { "" }
+                    // thư mục con (mỗi sách 1 thư mục để app nghe sách nhận đúng): "dir:<tên>"
+                    val sub = f.getOrElse(4) { "" }.removePrefix("dir:").replace(Regex("[\\\\/:*?\"<>|]"), " ").trim()
                     try {
                         saved += if (target.startsWith("uri:")) overwrite(src, target.substring(4), name, f.getOrElse(2) { "audio/mpeg" })
-                        else export(src, name, f.getOrElse(2) { "audio/mpeg" })
+                        else export(src, name, f.getOrElse(2) { "audio/mpeg" }, sub)
                     } catch (e: Exception) { log("LỖI lưu file: ${e.message}") }
                     finally { src.delete() }
                 }
@@ -181,25 +183,33 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
         export(src, name, mime)
     }
 
-    /** Lưu vào thư mục người dùng chọn, mặc định Download/Audio. */
-    private fun export(src: File, name: String, mime: String): String {
+    /** Lưu vào thư mục người dùng chọn (mặc định Download/Audio), trong thư mục con [sub] nếu có. Trùng tên thì thay. */
+    private fun export(src: File, name: String, mime: String, sub: String = ""): String {
+        val shown = if (sub.isEmpty()) name else "$sub/$name"
         if (saveTree.isNotEmpty()) {
-            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(saveTree))
-            if (tree == null || !tree.canWrite()) throw Exception("Không ghi được vào thư mục $saveLabel. Hãy chọn lại thư mục lưu.")
+            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(saveTree))
+            if (root == null || !root.canWrite()) throw Exception("Không ghi được vào thư mục $saveLabel. Hãy chọn lại thư mục lưu.")
+            val tree = if (sub.isEmpty()) root else (root.findFile(sub)?.takeIf { it.isDirectory } ?: root.createDirectory(sub)
+                ?: throw Exception("Không tạo được thư mục $sub trong $saveLabel"))
             tree.findFile(name)?.delete()
             val f = tree.createFile(mime, name) ?: throw Exception("Không tạo được file trong $saveLabel")
             ctx.contentResolver.openOutputStream(f.uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
-            log("Đã lưu: $saveLabel/${f.name ?: name}")
+            log("Đã lưu: $saveLabel/$shown")
             return name
         }
+        val rel = Environment.DIRECTORY_DOWNLOADS + "/Audio" + (if (sub.isEmpty()) "" else "/$sub")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = ctx.contentResolver
+            runCatching {   // file cùng tên do app tạo lần trước -> xoá, tránh "tên (1).m4a"
+                resolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?", arrayOf(name, "$rel/"))
+            }
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Audio")
+                put(MediaStore.Downloads.RELATIVE_PATH, rel)
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
-            val resolver = ctx.contentResolver
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw Exception("Không tạo được file trong Download")
             resolver.openOutputStream(uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
@@ -207,11 +217,11 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
             resolver.update(uri, values, null, null)
         } else {
             @Suppress("DEPRECATION")
-            val d = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Audio")
+            val d = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), rel.substringAfter('/'))
             d.mkdirs()
             src.copyTo(File(d, name), overwrite = true)
         }
-        log("Đã lưu: Download/Audio/$name")
+        log("Đã lưu: Download/Audio/$shown")
         return name
     }
 

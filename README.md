@@ -25,12 +25,18 @@ Mỗi lần push code Kotlin lên `main` (tăng `appVersion`), GitHub Actions t�
 | Gộp N | mặc định 10 |
 | Thông tin sách → Đếm phần từ | số của phần đầu tiên, vd `6` → phần 06, 07… (track 6/…, 7/…) |
 
-Kết quả: `Download/Audio/<tên playlist>_01_v1-10.m4a`, … kèm **ảnh bìa** (thumbnail video đầu nhóm, hoặc ảnh tự chọn: bấm ô *Ảnh bìa*) và tag album / tác giả / thể loại / số phần để app nghe xếp đúng.
+Kết quả: `Download/Audio/<Tên sách>/<tên playlist>_01_v1-10.m4a`, … kèm **ảnh bìa** (thumbnail video đầu nhóm, hoặc ảnh tự chọn: bấm ô *Ảnh bìa*) và tag album / tác giả / thể loại / số phần để app nghe xếp đúng.
 
 - Tải song song (hiện tốc độ MB/s, dùng aria2c) → cắt + ghép bằng copy → tăng tốc: chia file thành nhiều đoạn, mã hoá AAC song song trên **tất cả nhân CPU** → nối bằng copy.
 - Chạy nền có thông báo, tắt màn hình vẫn chạy; bấm *Dừng* trên thông báo để huỷ.
 - Bị ngắt giữa chừng → bấm Bắt đầu lại với cùng link, video đã tải được giữ lại.
 - Tự cập nhật yt-dlp (12 giờ/lần).
+
+## Nghe bằng Voice (hoặc app nghe sách khác)
+- Voice: 1 thư mục = 1 sách, mỗi file = 1 chương (xếp theo tên file). Tên sách = Album của file đầu, tác giả = Artist, tên chương = Title.
+- App ghi đúng như vậy: Album giống nhau ở mọi phần, mỗi sách 1 thư mục con, Title = `{phan}. {gon}` (tên video rút gọn, vd `01. Tập 001 → Tập 002`).
+- Mỗi file có chương con theo từng video (chpl + chapter track của m4a), trong Voice tua tới từng tập được.
+- Trong Voice thêm thư mục `Download/Audio` kiểu *thư mục chứa nhiều sách*.
 
 ## Bị YouTube chặn ("Sign in to confirm you're not a bot")
 App lấy thông tin lần lượt từng video (chờ ngẫu nhiên 1–3 s) và dừng ngay khi bị chặn. Nếu vẫn bị: đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ.

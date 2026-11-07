@@ -18,8 +18,9 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.2"
+ENGINE_VERSION = "0.0.3"
 
+import collections
 import hashlib
 import json
 import math
@@ -384,7 +385,7 @@ def envelope(path, ss=0.0, to=None, speed=1.0):
     rng = ["-ss", "%.3f" % ss] + (["-to", "%.3f" % to] if to else [])
     af = (atempo(speed) + ",") if abs(speed - 1) > 0.005 else ""
     r = subprocess.run([P["ffmpeg"], "-v", "error", *rng, "-i", path, "-vn", "-af",
-                        af + "aresample=8000,asetnsamples=n=256:p=0,astats=metadata=1:reset=1:measure_perchannel=none:"
+                        af + "aformat=channel_layouts=mono,aresample=8000,asetnsamples=n=256:p=0,astats=metadata=1:reset=1:measure_perchannel=none:"
                         "measure_overall=RMS_level,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
                         "-f", "null", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
     return [max(-70.0, float(x)) if x not in ("-inf", "inf", "nan") else -70.0
@@ -622,15 +623,17 @@ def cover_args(cover):
 
 
 def speed_up(src, dur, wdir, g, ngroups):
-    """1 file đã ghép -> chia đều N đoạn (N = số nhân), mỗi nhân: giải mã + atempo + AAC, nối lại bằng copy."""
-    n = max(1, min(CORES, math.ceil(dur / 120)))
+    """1 file đã ghép -> chia đều N đoạn (≈3 đoạn/nhân để nhân nhanh của CPU big.LITTLE nhận thêm việc),
+    CORES luồng song song: giải mã + atempo + AAC, nối lại bằng copy."""
+    n = max(1, min(CORES * 3, math.ceil(dur / 40)))
     ln = dur / n
     total_out = dur / P["speed"]
     done = {}
     t0 = time.time()
     last = [0.0]
     flt = atempo(P["speed"])
-    status("Tăng tốc %.2fx: %.0f phút audio trên %d nhân…" % (P["speed"], dur / 60, n))
+    coder = "fast" if P.get("fastAac", True) else "twoloop"
+    status("Tăng tốc %.2fx: %.0f phút audio trên %d nhân…" % (P["speed"], dur / 60, CORES))
     parts = [os.path.join(wdir, "sp_%d_%02d.m4a" % (g, i)) for i in range(n)]
 
     def job(i):
@@ -642,18 +645,19 @@ def speed_up(src, dur, wdir, g, ngroups):
                 d = sum(done.values())
                 progress(0.45 + 0.55 * (g + 0.9 * d / total_out) / ngroups)
                 status("Tăng tốc %d/%d: %.0f%% · %.0fx realtime · %d nhân" % (
-                    g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1), n))
+                    g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1), CORES))
         ffmpeg(["-threads", "1", "-ss", "%.3f" % (i * ln), "-t", "%.3f" % ln, "-i", src, "-vn", "-af", flt,
-                "-c:a", "aac", "-b:a", "128k", parts[i]], on_t)
+                "-c:a", "aac", "-aac_coder", coder, "-b:a", "128k", parts[i]], on_t)
 
-    with ThreadPoolExecutor(max_workers=n) as ex:
+    with ThreadPoolExecutor(max_workers=min(n, CORES)) as ex:
         list(ex.map(job, range(n)))
     lst = os.path.join(wdir, "sp_%d.txt" % g)
     open(lst, "w", encoding="utf-8").write("".join("file '%s'\n" % q(x) for x in parts))
     out = os.path.join(wdir, "sped_%d.m4a" % g)
     ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out])
     for x in parts: os.remove(x)
-    log("Tăng tốc %.0f phút audio: %.1fs (%.0fx realtime)" % (total_out / 60, secs(t0), total_out / max(secs(t0), 0.1)))
+    log("Tăng tốc %.0f phút audio: %.1fs (%.0fx realtime, AAC %s, %d đoạn)" % (
+        total_out / 60, secs(t0), total_out / max(secs(t0), 0.1), coder, n))
     return out
 
 
@@ -662,11 +666,14 @@ def speed_up(src, dur, wdir, g, ngroups):
 #   Tên sách -> album (ID3 TALB / MP4 ©alb)
 #   Tác giả  -> album_artist (TPE2 / aART) và artist (TPE1 / ©ART)
 #   Thể loại -> genre (TCON / ©gen)
-# Mỗi phần: title = "{phan}. {ten}", track = phần/tổng để trình phát xếp đúng thứ tự.
+# Mỗi phần: title = "{phan}. {gon}", track = phần/tổng để trình phát xếp đúng thứ tự.
+# App Voice: 1 thư mục = 1 sách, file = chương (xếp theo tên file), tên sách = album của file đầu, tác giả = artist,
+# tên chương = title; chương bên trong file đọc từ chpl / chapter track của m4a -> mỗi video 1 chương.
+# Vì vậy tên sách chỉ dùng biến chung của cả sách (giống nhau ở mọi phần) và mỗi sách lưu 1 thư mục con.
 # Số phần bắt đầu từ partStart (vd 11 khi sách đã có phần 1–10).
 DEFAULT_TPL = {
     "nameTpl": "{sach}_{phan}_v{tu}-{den}",       # tên file (không cần đuôi)
-    "titleTpl": "{phan}. {ten}",                   # tên từng phần (TIT2)
+    "titleTpl": "{phan}. {gon}",                   # tên từng phần (TIT2) = tên chương trong app nghe
     "bookTpl": "{playlist}",                       # tên sách
     "authorTpl": "{kenh}",                         # tác giả
 }
@@ -675,6 +682,37 @@ DEFAULT_TPL = {
 class _Keep(dict):
     def __missing__(self, k):            # biến không có thì giữ nguyên "{k}"
         return "{" + k + "}"
+
+
+def short_titles(titles):
+    """Bỏ phần lặp lại ở mọi video (tên truyện, "audio"…): "Truyện X - Tập 002 (Chương 11-20) audio" -> "Tập 002 (Chương 11-20)"."""
+    def common(a, b):                      # phần chung ở đầu, cắt tại dấu cách
+        p = os.path.commonprefix([a, b])
+        if len(p) < min(len(a), len(b)):
+            p = p[:p.rfind(" ") + 1]
+            if a[len(p):len(p) + 1].isdigit():   # "… Tập 002": giữ chữ "Tập" đứng trước số
+                p = p[:p.rstrip().rfind(" ") + 1]
+        return p
+    pre = collections.Counter(common(a, b) for a, b in zip(titles, titles[1:]))
+    suf = collections.Counter(common(a[::-1], b[::-1])[::-1] for a, b in zip(titles, titles[1:]))
+    pre = max((p for p in pre if len(p.strip()) >= 6), key=lambda p: (pre[p], len(p)), default="")
+    suf = max((p for p in suf if len(p.strip()) >= 3), key=lambda p: (suf[p], len(p)), default="")
+    out = []
+    for t in titles:
+        x = t.split(pre, 1)[1] if pre and pre in t else t
+        x = x[:-len(suf)] if suf and x.endswith(suf) else x
+        out.append(x.strip(" -–—|:·,") or t)
+    return out
+
+
+def chapters_file(path, marks, total):
+    """File ffmetadata chương: marks = [(giây bắt đầu, tên)]."""
+    esc = lambda v: re.sub(r"([=;#\\\n])", r"\\\1", v)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(";FFMETADATA1\n")
+        for i, (t, name) in enumerate(marks):
+            end = marks[i + 1][0] if i + 1 < len(marks) else total
+            f.write("[CHAPTER]\nTIMEBASE=1/1000\nSTART=%d\nEND=%d\ntitle=%s\n" % (t * 1000, end * 1000, esc(name)))
 
 
 def render(tpl, vals):
@@ -720,10 +758,14 @@ def main():
     tpl = {k: P_get(k, d) for k, d in DEFAULT_TPL.items()}
     playlist = meta["title"] or entries[0]["title"]
     channel = meta["uploader"] or playlist
-    base_vals = {"kenh": channel, "playlist": playlist}
-    author = render(tpl["authorTpl"], base_vals) or channel
     genre = P_get("genre", "Audiobook")
     today = time.strftime("%Y-%m-%d")
+    book_vals = {"kenh": channel, "playlist": playlist, "the_loai": genre, "ngay": today}
+    author = render(tpl["authorTpl"], book_vals) or channel
+    book_vals["tac_gia"] = author
+    book = render(tpl["bookTpl"], book_vals) or playlist      # giống nhau ở mọi phần (app nghe lấy từ file đầu)
+    folder = ("dir:" + sanitize(book)[:100]) if P.get("bookFolder", True) else ""
+    gon = dict(zip((e["n"] for e in entries), short_titles([e["title"] for e in entries])))
     os.makedirs(P["out"], exist_ok=True)
 
     for g, vids in enumerate(groups):
@@ -738,6 +780,10 @@ def main():
         joined = os.path.join(wdir, "joined_%d.mka" % g)
         ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-map", "0:a", "-c", "copy", joined])
         jdur = sum(y - x for _, x, y in items)
+        marks, t = [], 0.0                       # chương = từng video (giây trong file đã tăng tốc)
+        for r in vids:
+            marks.append((t / P["speed"], gon[r["entry"]["n"]]))
+            t += sum(y - x for x, y in keep_parts(r, *keep_range(r)))
         log("Ghép %d video (%.0f phút) không mã hoá: %.1fs" % (len(vids), jdur / 60, secs(tg)))
 
         # 2) Tốc độ (bắt buộc mã hoá lại AAC). Tốc độ 1 và nguồn đã là AAC thì giữ nguyên, khỏi mã hoá.
@@ -752,18 +798,22 @@ def main():
                 "tong": last_part, "tu": first["index"], "den": last["index"],
                 "ten_dau": first["title"], "ten_cuoi": last["title"],
                 "ten": first["title"] + (" → " + last["title"] if len(vids) > 1 else ""),
-                "ngay": today, "ext": "m4a"}
-        # Tên sách dùng được mọi biến của phần ({phan}, {tu}, {den}, {ten_dau}…); tên file dùng được {sach}
-        book = render(tpl["bookTpl"], vals) or playlist
-        vals["sach"] = book
+                "gon_dau": gon[first["n"]], "gon_cuoi": gon[last["n"]],
+                "gon": gon[first["n"]] + (" → " + gon[last["n"]] if len(vids) > 1 else ""),
+                "ngay": today, "ext": "m4a", "sach": book}
         name = sanitize(render(tpl["nameTpl"], vals))[:150]
         if not name.lower().endswith(".m4a"):
             name += ".m4a"
         out = os.path.join(P["out"], "final_%d.m4a" % g)
         cover = make_cover(wdir, first["index"])
-        args = ["-i", audio]
-        args += ["-i", cover, "-map", "0:a", "-map", "1:v"] if cover else ["-map", "0:a"]
-        args += ["-c", "copy"]
+        args = ["-i", audio] + (["-i", cover] if cover else [])
+        maps = ["-map", "0:a"] + (["-map", "1:v"] if cover else [])
+        if P.get("chapters", True) and len(vids) > 1:
+            chap = os.path.join(wdir, "chap_%d.txt" % g)
+            chapters_file(chap, marks, jdur / P["speed"])
+            args += ["-i", chap]
+            maps += ["-map_chapters", "2" if cover else "1"]
+        args += maps + ["-c", "copy"]
         tags = [("title", render(tpl["titleTpl"], vals)), ("album", book), ("album_artist", author), ("artist", author),
                 ("genre", genre), ("track", "%d/%d" % (part, last_part))]
         for k, v in tags:
@@ -775,7 +825,7 @@ def main():
             if not cover: raise
             log("Không gắn được ảnh bìa: %s" % short(e))
             ffmpeg(["-i", audio, "-map", "0:a", "-c", "copy", out])
-        emit("FILE", out, name, "audio/mp4")     # app lưu file rồi xoá
+        emit("FILE", out, name, "audio/mp4", "", folder)     # app lưu file (vào thư mục con của sách) rồi xoá
         for x in {joined, audio}:
             if os.path.exists(x): os.remove(x)
         log("Phần %d xong: %.1fs" % (g + 1, secs(tg)))

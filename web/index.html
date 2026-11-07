@@ -9,7 +9,7 @@
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 2, UI_VERSION = "0.0.2";</script>
+<script>const UI_API = 2, UI_VERSION = "0.0.3";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -76,20 +76,26 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
     <span class="small" style="flex:1">Định dạng: M4A (AAC)</span>
     <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
   </div>
+  <div class="row"><label class="chk" style="flex:1"><input type="checkbox" id="fastAac">Mã hoá nhanh (AAC fast, ~35% nhanh hơn)</label></div>
   <div class="row"><span class="small" id="adUse" style="flex:1"></span><button class="link" id="adGo">Mẫu quảng cáo</button></div>
   <details id="meta">
-    <summary>Thông tin sách (metadata audiobook)</summary>
-    <div class="row"><div class="f"><label>Tên sách → Album (dùng được biến, vd: {playlist} {phan})</label><input id="bookTpl" class="l" placeholder="{playlist}"></div></div>
-    <div class="row"><div class="f"><label>Tác giả → Album Artist + Artist</label><input id="authorTpl" class="l" placeholder="{kenh}"></div></div>
+    <summary>Thông tin sách (app nghe sách: Voice…)</summary>
+    <div class="row"><div class="f"><label>Tên sách → Album (giống nhau mọi phần)</label><input id="bookTpl" class="l" placeholder="{playlist}"></div></div>
+    <div class="row"><div class="f"><label>Tác giả → Artist + Album Artist</label><input id="authorTpl" class="l" placeholder="{kenh}"></div></div>
     <div class="row"><div class="f"><label>Thể loại → Genre</label><input id="genre" class="l" placeholder="Audiobook"></div></div>
-    <div class="row"><div class="f" style="flex:3"><label>Tên file</label><input id="nameTpl" class="l" placeholder="{sach}_{phan}_v{tu}-{den}"></div>
+    <div class="row"><div class="f"><label>Tên chương → Title (mỗi file)</label><input id="titleTpl" class="l" placeholder="{phan}. {gon}"></div></div>
+    <div class="row"><div class="f" style="flex:3"><label>Tên file (xếp thứ tự chương)</label><input id="nameTpl" class="l" placeholder="{sach}_{phan}_v{tu}-{den}"></div>
       <div class="f"><label>Đếm phần từ</label><input id="partStart" inputmode="numeric" placeholder="1"></div></div>
-    <div class="help">Để trống = mặc định (chữ mờ). Mỗi phần tự có tên <code>{phan}. {ten}</code> và số thứ tự phần/tổng để trình phát xếp đúng.
-      <b>Đếm phần từ</b>: số của phần đầu tiên (vd đã có phần 1–5 thì nhập 6 để chạy tiếp).
-      Biến dùng được cho <b>Tên sách, Tác giả, Tên file</b>: <code>{playlist}</code> tên playlist · <code>{kenh}</code> tên kênh ·
-      <code>{tac_gia}</code> tác giả · <code>{phan}</code> số phần (01, 02…) · <code>{tong}</code> tổng số phần ·
-      <code>{tu}</code>/<code>{den}</code> số video đầu/cuối · <code>{ten}</code> tên video đầu → cuối · <code>{ten_dau}</code> · <code>{ten_cuoi}</code> · <code>{ngay}</code>.
-      Tên file còn có <code>{sach}</code> (tên sách sau khi thay biến).
+    <div class="row"><label class="chk"><input type="checkbox" id="bookFolder">Mỗi sách 1 thư mục con</label></div>
+    <div class="row"><label class="chk"><input type="checkbox" id="chapters">Chương con theo từng video trong file</label></div>
+    <div class="help">Voice: 1 thư mục = 1 sách, mỗi file = 1 chương (xếp theo tên file); tên sách lấy từ Album của file đầu, tác giả từ Artist,
+      tên chương từ Title. Vì vậy mỗi sách lưu vào <code>Audio/&lt;Tên sách&gt;/</code> — trong Voice thêm thư mục <code>Download/Audio</code>
+      kiểu <b>thư mục chứa nhiều sách</b>. Chương con: tua tới từng video ngay trong file.
+      <br>Để trống = mặc định (chữ mờ). <b>Đếm phần từ</b>: số của phần đầu (đã có phần 1–5 thì nhập 6).
+      <br><b>Tên sách, Tác giả</b>: <code>{playlist}</code> tên playlist · <code>{kenh}</code> kênh · <code>{tac_gia}</code> · <code>{ngay}</code>.
+      <b>Tên chương, Tên file</b> thêm: <code>{sach}</code> · <code>{phan}</code> số phần (01, 02…) · <code>{tong}</code> ·
+      <code>{tu}</code>/<code>{den}</code> số video đầu/cuối · <code>{gon}</code> tên video rút gọn đầu → cuối (vd Tập 001 → Tập 002) ·
+      <code>{gon_dau}</code> · <code>{gon_cuoi}</code> · <code>{ten}</code> tên video đầy đủ · <code>{ten_dau}</code> · <code>{ten_cuoi}</code>.
       <div id="preview" style="margin-top:6px;color:#bbb"></div>
     </div>
     <div class="row"><button class="link" id="metaReset">Đặt lại mặc định</button></div>
@@ -178,19 +184,26 @@ for (const k of ["url","from","count","group","trimStart","trimEnd","speed"]) {
   $(k).value = P[k]; $(k).oninput = () => { P[k] = $(k).value.trim(); save(); };
 }
 // ---- thông tin sách (Tên sách -> album, Tác giả -> album_artist + artist, Thể loại -> genre)
-const META = ["bookTpl","authorTpl","genre","nameTpl","partStart"];
+const META = ["bookTpl","authorTpl","genre","titleTpl","nameTpl","partStart"];
+const OPTS = ["bookFolder","chapters","fastAac"];          // mặc định bật
 const DEST = "Download/Audio";
 function preview(){
   const r0 = (t, v) => t.replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m);
-  const base = {playlist:"Tên playlist", kenh:"Tên kênh"};
-  const tac_gia = r0(P.authorTpl || "{kenh}", base);
-  const p0 = partStart(), pad = n => String(n).padStart(2, "0");
-  const v = {...base, tac_gia, phan:pad(p0), tong:pad(p0 + 4), tu:P.from||1, den:(parseInt(P.from)||1) + (parseInt(P.group)||10) - 1,
-    ten:"Tập 1 → Tập 10", ten_dau:"Tập 1", ten_cuoi:"Tập 10", ngay:new Date().toISOString().slice(0,10)};
-  const sach = r0(P.bookTpl || "{playlist}", v); v.sach = sach;
-  $("preview").textContent = "Ví dụ: " + r0(P.nameTpl || $("nameTpl").placeholder, v) + ".m4a" +
-    "  ·  Sách: " + sach + "  ·  Tác giả: " + tac_gia + "  ·  Thể loại: " + (P.genre || "Audiobook");
+  const b = {playlist:"Tên playlist", kenh:"Tên kênh", ngay:new Date().toISOString().slice(0,10)};
+  b.tac_gia = r0(P.authorTpl || "{kenh}", b);
+  const sach = r0(P.bookTpl || "{playlist}", b);
+  const p0 = partStart(), pad = n => String(n).padStart(2, "0"), tu = parseInt(P.from) || 1;
+  const v = {...b, sach, phan:pad(p0), tong:pad(p0 + 4), tu, den:tu + (parseInt(P.group) || 10) - 1,
+    gon:"Tập 001 → Tập 010", gon_dau:"Tập 001", gon_cuoi:"Tập 010", ten:"Truyện X - Tập 001 → Truyện X - Tập 010",
+    ten_dau:"Truyện X - Tập 001", ten_cuoi:"Truyện X - Tập 010"};
+  const bad = /\{(phan|tong|tu|den|gon\w*|ten\w*|sach)\}/.exec(P.bookTpl || "");
+  $("preview").textContent = (bad ? `⚠ Tên sách không dùng được ${bad[0]} (phải giống nhau mọi phần). ` : "") +
+    "Ví dụ: " + (P.bookFolder ? sach + "/" : "") + r0(P.nameTpl || $("nameTpl").placeholder, v) + ".m4a" +
+    "  ·  Sách: " + sach + "  ·  Tác giả: " + b.tac_gia + "  ·  Chương: " + r0(P.titleTpl || "{phan}. {gon}", v) +
+    "  ·  Thể loại: " + (P.genre || "Audiobook");
 }
+for (const k of OPTS) { if (P[k] === undefined) P[k] = true;
+  $(k).checked = P[k]; $(k).onchange = () => { P[k] = $(k).checked; save(); preview(); }; }
 for (const k of META) { $(k).value = P[k] || ""; $(k).oninput = () => { P[k] = $(k).value; save(); preview(); }; }
 $("metaReset").onclick = () => { for (const k of META) { $(k).value = P[k] = ""; } save(); preview(); };
 $("meta").ontoggle = preview;
@@ -208,7 +221,7 @@ $("savePick").onclick = () => !running && pick("folder", r => { P.saveTree = r.u
 $("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSave(); };
 
 function sync(){
-  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META,
+  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META,...OPTS,
     "adLink","adIdx","adFrom","adTo","adLabel","adAdd","adMatch","cutPick","cutSpeed","cutOver","cutRun"]) $(id).disabled = running;
   $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
 }
@@ -222,7 +235,8 @@ $("run").onclick = () => {
   A.run(JSON.stringify({ mode:"playlist", url:P.url, from:parseInt(P.from)||1, count:parseInt(P.count)||0,
     group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
     cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || DEST,
-    nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", partStart:partStart(),
+    nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", titleTpl:P.titleTpl || "",
+    partStart:partStart(), bookFolder:P.bookFolder, chapters:P.chapters, fastAac:P.fastAac,
     ...adParams() }));
 };
 
