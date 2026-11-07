@@ -27,6 +27,9 @@ header .ver{color:var(--dim);font-size:12px;padding:6px 4px;cursor:pointer}
 .f input:focus{border-color:var(--acc)}
 .f label{position:absolute;left:8px;top:3px;font-size:10.5px;color:var(--dim);pointer-events:none}
 .row{display:flex;gap:6px;margin-top:6px;align-items:center}
+.chk{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text)}
+.chk input{accent-color:var(--acc);width:18px;height:18px;margin:0}
+h3{font-size:13px;font-weight:600;margin:12px 0 0}
 .thumb{width:44px;height:44px;border-radius:6px;background:#1a1a1a center/cover no-repeat;border:1px solid var(--line);flex:none}
 .small{font-size:12px;color:var(--dim)}
 .link{background:none;border:0;color:var(--acc);font-size:12px;padding:6px 4px}
@@ -54,7 +57,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
 </head>
 <body>
 <header><h1>Audio YtDl</h1><span class="ver" id="ver" title="Kiểm tra cập nhật"></span></header>
-<div class="tabs"><button id="tabDl" class="on">Tải playlist</button><button id="tabTag">Sửa tag file</button></div>
+<div class="tabs"><button id="tabDl" class="on">Tải playlist</button><button id="tabAd">Mẫu quảng cáo</button><button id="tabTag">Sửa tag</button></div>
 
 <!-- ============ TAB TẢI ============ -->
 <section id="pDl">
@@ -73,6 +76,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
     <span class="small" style="flex:1">Định dạng: M4A (AAC)</span>
     <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
   </div>
+  <div class="row"><span class="small" id="adUse" style="flex:1"></span><button class="link" id="adGo">Mẫu quảng cáo</button></div>
   <details id="meta">
     <summary>Thông tin sách (metadata audiobook)</summary>
     <div class="row"><div class="f"><label>Tên sách → Album (dùng được biến, vd: {playlist} {phan})</label><input id="bookTpl" class="l" placeholder="{playlist}"></div></div>
@@ -92,6 +96,32 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
   </details>
   <div class="row"><span class="small" id="saveLbl" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><button class="x hide" id="saveClr">✕</button><button class="link" id="savePick">Đổi thư mục</button></div>
   <div class="row"><button class="btn" id="run">Bắt đầu</button></div>
+</section>
+
+<!-- ============ TAB MẪU QUẢNG CÁO ============ -->
+<section id="pAd" class="hide">
+  <h3 style="margin-top:0">1. Lấy mẫu từ video YouTube</h3>
+  <div class="row"><div class="f" style="flex:3"><label>Link video / playlist</label><input id="adLink" class="l" inputmode="url"></div><div class="f"><label>Video số</label><input id="adIdx" inputmode="numeric" value="1"></div></div>
+  <div class="row">
+    <div class="f"><label>Từ (m:ss)</label><input id="adFrom" placeholder="13:38"></div>
+    <div class="f"><label>Đến (m:ss)</label><input id="adTo" placeholder="13:47"></div>
+    <div class="f" style="flex:2"><label>Tên mẫu</label><input id="adLabel" class="l" placeholder="vd: QC kênh A"></div>
+  </div>
+  <div class="row"><button class="btn" id="adAdd">Lấy mẫu</button></div>
+  <div class="help">Xem video trên YouTube, ghi lại thời điểm bắt đầu – kết thúc của đoạn quảng cáo (nên 5–30 giây, đúng nguyên đoạn).
+    Link playlist thì nhập thêm số thứ tự video. App tải audio video đó rồi cắt đoạn làm mẫu.</div>
+  <h3>2. Thư viện mẫu <span class="small" id="adCount"></span></h3>
+  <div id="adList"></div>
+  <div class="row"><div class="f" style="flex:none;width:130px"><label>Độ giống tối thiểu %</label><input id="adMatch" inputmode="numeric"></div>
+    <span class="small" style="flex:1">Mẫu được tích sẽ dùng khi tải playlist và khi cắt file. Cắt nhầm thì tăng, sót thì giảm (75–95).</span></div>
+  <h3>3. Cắt đoạn giống mẫu trong file có sẵn</h3>
+  <div class="row"><button class="btn2" id="cutPick" style="flex:1">Chọn file audio</button></div>
+  <div class="small" id="cutName" style="margin-top:4px"></div>
+  <div class="row"><div class="f" style="flex:none;width:130px"><label>File đã tăng tốc ×</label><input id="cutSpeed" inputmode="decimal" value="1"></div>
+    <label class="chk" style="flex:1"><input type="checkbox" id="cutOver">Ghi đè file gốc</label></div>
+  <div class="row"><button class="btn" id="cutRun">Cắt đoạn giống mẫu</button></div>
+  <div class="help">Cắt không mã hoá lại, giữ ảnh bìa và thông tin. File app đã xuất ở tốc độ khác 1 thì nhập tốc độ đó (vd 1.25) để so đúng.
+    Không ghi đè thì lưu bản mới vào thư mục lưu.</div>
 </section>
 
 <!-- ============ TAB SỬA TAG ============ -->
@@ -122,11 +152,11 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
 <script>
 const A = window.App || {   // chạy thử trên trình duyệt máy tính
   prefGet: () => "", prefSet: () => {}, run: p => console.log("run", p), stop: () => {}, pick: () => {},
-  info: () => '{"app":"dev"}', toast: m => alert(m), checkUpdate: () => {}
+  info: () => '{"app":"dev"}', toast: m => alert(m), checkUpdate: () => {}, adFiles: () => "null", adDelete: () => {}
 };
 const $ = id => document.getElementById(id);
 const P = Object.assign({url:"", from:"1", count:"10", group:"10", trimStart:"10", trimEnd:"30", speed:"1.25",
-  cover:"", coverPreview:"", saveTree:"", saveLabel:""}, JSON.parse(A.prefGet("ui") || "{}"));
+  cover:"", coverPreview:"", saveTree:"", saveLabel:"", ads:[], adMatch:"85"}, JSON.parse(A.prefGet("ui") || "{}"));
 const save = () => A.prefSet("ui", JSON.stringify(P));
 let running = false;
 
@@ -136,9 +166,10 @@ $("ver").textContent = (info.app || "") + " · UI " + UI_VERSION + " ⟳";
 $("ver").onclick = () => A.checkUpdate();
 
 // ---- tab
-function tab(t){ $("pDl").classList.toggle("hide", t!=="dl"); $("pTag").classList.toggle("hide", t!=="tag");
-  $("tabDl").classList.toggle("on", t==="dl"); $("tabTag").classList.toggle("on", t==="tag"); }
+const TABS = {Dl:"dl", Ad:"ad", Tag:"tag"};
+function tab(t){ for (const k in TABS) { $("p" + k).classList.toggle("hide", TABS[k] !== t); $("tab" + k).classList.toggle("on", TABS[k] === t); } }
 $("tabDl").onclick = () => tab("dl");
+$("tabAd").onclick = $("adGo").onclick = () => { if (!$("adLink").value) $("adLink").value = P.url; tab("ad"); };
 $("tabTag").onclick = () => { if (!$("tagLink").value) $("tagLink").value = P.url; tab("tag"); };
 
 // ---- tab tải: ràng buộc ô nhập với prefs
@@ -176,7 +207,8 @@ $("savePick").onclick = () => !running && pick("folder", r => { P.saveTree = r.u
 $("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSave(); };
 
 function sync(){
-  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META]) $(id).disabled = running;
+  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META,
+    "adLink","adIdx","adFrom","adTo","adLabel","adAdd","adMatch","cutPick","cutSpeed","cutOver","cutRun"]) $(id).disabled = running;
   $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
 }
 const secs = s => String(s||"0").trim().split(":").reduce((a,x) => a*60 + (parseFloat(x)||0), 0);
@@ -189,7 +221,55 @@ $("run").onclick = () => {
   A.run(JSON.stringify({ mode:"playlist", url:P.url, from:parseInt(P.from)||1, count:parseInt(P.count)||0,
     group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
     cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || DEST,
-    nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", partStart:partStart() }));
+    nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", partStart:partStart(),
+    ...adParams() }));
+};
+
+// ---- mẫu quảng cáo: engine "addAd" lưu mẫu vào thư viện của app (filesDir/ads), "cutAds" cắt trong 1 file
+const adOn = () => P.ads.filter(a => a.on);
+const adParams = () => ({adIds:adOn().map(a => a.id), adMatch:Math.min(99, Math.max(50, parseInt(P.adMatch) || 85))});
+function showAds(){
+  const on = adOn().length;
+  $("adCount").textContent = P.ads.length ? `· ${on}/${P.ads.length} mẫu đang dùng` : "· chưa có mẫu";
+  $("adUse").textContent = on ? `Cắt đoạn giống mẫu: ${on} mẫu` : "Không cắt đoạn giống mẫu";
+  $("adList").innerHTML = "";
+  P.ads.forEach((a, i) => {
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = `<label class="chk" style="flex:1"><input type="checkbox"><span></span> <span class="small"></span></label><button class="x">✕</button>`;
+    row.querySelector("span").textContent = a.label; row.querySelector(".small").textContent = a.info || "";
+    const cb = row.querySelector("input"); cb.checked = !!a.on; cb.disabled = running;
+    cb.onchange = () => { a.on = cb.checked; save(); showAds(); };
+    row.querySelector("button").onclick = () => { if (running) return; A.adDelete(a.id); P.ads.splice(i, 1); save(); showAds(); };
+    $("adList").appendChild(row);
+  });
+}
+function refreshAds(){   // bỏ mẫu không có file (lấy mẫu lỗi / đã xoá)
+  const ids = JSON.parse(A.adFiles() || "null");
+  if (Array.isArray(ids)) { P.ads = P.ads.filter(a => ids.includes(a.id)); save(); }
+  showAds();
+}
+$("adMatch").value = P.adMatch; $("adMatch").oninput = () => { P.adMatch = $("adMatch").value.trim(); save(); };
+$("adAdd").onclick = () => {
+  if (running) return;
+  const link = $("adLink").value.trim();
+  if (!/^https?:\/\//.test(link)) return A.toast("Nhập link YouTube");
+  const a = secs($("adFrom").value), b = secs($("adTo").value);
+  if (!(b >= a + 2)) return A.toast("Đoạn mẫu phải dài ít nhất 2 giây (Đến > Từ)");
+  const idx = parseInt($("adIdx").value) || 1, id = "ad" + Date.now();
+  const label = $("adLabel").value.trim() || ("Mẫu " + (P.ads.length + 1));
+  P.ads.push({id, label, on:true, info:`${$("adFrom").value.trim()}–${$("adTo").value.trim()}` + (/list=/.test(link) ? ` · video ${idx}` : "")});
+  save(); showAds();
+  for (const k of ["adFrom","adTo","adLabel"]) $(k).value = "";
+  A.run(JSON.stringify({mode:"addAd", link, index:idx, start:a, end:b, id, label}));
+};
+let C = {};
+$("cutPick").onclick = () => pick("audio", r => { C.file = r; $("cutName").textContent = r.name; });
+$("cutRun").onclick = () => {
+  if (!C.file) return A.toast("Chọn file audio trước");
+  if (!adOn().length) return A.toast("Tích ít nhất 1 mẫu trong thư viện");
+  const sp = parseFloat(($("cutSpeed").value || "1").replace(",", ".")) || 1;
+  A.run(JSON.stringify({mode:"cutAds", input:C.file.path, inputUri:C.file.uri, name:C.file.name, fileSpeed:sp,
+    overwrite:$("cutOver").checked, ...adParams(), saveTree:P.saveTree, saveLabel:P.saveLabel || DEST}));
 };
 
 // ---- tab sửa tag
@@ -223,7 +303,9 @@ window.__onPick = (id, r) => { const cb = picks[id]; delete picks[id]; if (cb &&
 // ---- trạng thái từ app (đang chạy, tiến độ, nhật ký)
 let lastLog = "";
 window.__onState = s => {
+  const was = running;
   running = !!s.running; sync();
+  if (was !== running) { if (!running) refreshAds(); else showAds(); }
   $("status").textContent = s.status || "";
   $("bar").style.width = ((s.progress || 0) / 10) + "%";
   if (s.log !== lastLog) { const el = $("log"), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
@@ -231,7 +313,7 @@ window.__onState = s => {
 };
 window.__onShare = text => { const m = /https?:\/\/\S+/.exec(text || ""); if (m && !running) { $("url").value = P.url = m[0]; save(); tab("dl"); } };
 
-showCover(); showSave(); sync();
+showCover(); showSave(); refreshAds(); sync();
 </script>
 </body>
 </html>

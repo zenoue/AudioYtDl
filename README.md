@@ -2,7 +2,12 @@
 
 App Android: dán link playlist YouTube → tải audio → **cắt đầu / cắt cuối** → **tăng tốc** → **gộp mỗi N video thành 1 file M4A (AAC)**. Mọi thứ chạy trên điện thoại (dùng mạng của máy nên không bị YouTube chặn như máy chủ).
 
-Tách từ [Playlist_ytdl](https://github.com/zenoue/Playlist_ytdl), bỏ xoá quảng cáo, mono, không mã hoá và chọn định dạng; chỉ xuất M4A.
+Tách từ [Playlist_ytdl](https://github.com/zenoue/Playlist_ytdl), bỏ tự tìm quảng cáo, mono, không mã hoá và chọn định dạng; chỉ xuất M4A.
+
+## Mẫu quảng cáo (cắt đoạn giống mẫu)
+1. Tab **Mẫu quảng cáo** → dán link video (hoặc playlist + số video), nhập **Từ – Đến** của đoạn quảng cáo → *Lấy mẫu*. App tải audio video đó và cắt đoạn làm mẫu (lưu trong app).
+2. Tích các mẫu cần dùng. Khi tải playlist, mọi chỗ có dạng sóng năng lượng giống mẫu ≥ *Độ giống* (mặc định 85%) bị cắt đúng bằng độ dài mẫu, khi ghép (không mã hoá lại).
+3. **Cắt đoạn giống mẫu trong file có sẵn**: chọn file audio trong máy → *Cắt*. File đã tăng tốc thì nhập tốc độ (vd 1.25). Có thể ghi đè file gốc.
 
 ## Tải APK
 Vào **[Releases](../../releases/latest)** → tải `AudioYtDl-<phiên bản>.apk` → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").

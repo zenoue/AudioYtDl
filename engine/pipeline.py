@@ -14,6 +14,8 @@ Giao tiếp với app qua stdout, mỗi dòng 1 lệnh:
   @@ERROR <text>        lỗi (kết thúc)
 Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sang + đường dẫn app thêm vào.
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
+        | "addAd" (lấy mẫu quảng cáo từ 1 khoảng thời gian của video YouTube)
+        | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 2          # phải khớp Engine.ENGINE_API trong app
 ENGINE_VERSION = "0.0.1"
@@ -35,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 P = json.load(open(sys.argv[1], encoding="utf-8"))
 for _k, _d in (("from", 1), ("count", 0), ("group", 10), ("partStart", 1)):
     P[_k] = int(P.get(_k) or _d)
-for _k, _d in (("trimStart", 0.0), ("trimEnd", 0.0), ("speed", 1.0)):
+for _k, _d in (("trimStart", 0.0), ("trimEnd", 0.0), ("speed", 1.0), ("adMatch", 85.0)):
     P[_k] = float(P.get(_k) or _d)
 P.setdefault("url", "")
 sys.path.insert(0, P["ytdlp"])          # file yt-dlp (zipapp) do app quản lý / tự cập nhật
@@ -139,13 +141,13 @@ def ffmpeg(args, on_time=None):
 
 
 def probe(path):
-    """(thời lượng giây, codec audio) đọc từ ffmpeg -i."""
+    """(thời lượng giây, codec audio, có ảnh bìa) đọc từ ffmpeg -i."""
     r = subprocess.run([P["ffmpeg"], "-hide_banner", "-i", path], stdout=subprocess.PIPE,
                        stderr=subprocess.STDOUT, text=True, errors="replace")
     m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", r.stdout)
     dur = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else 0.0
     c = re.search(r"Audio: (\w+)", r.stdout)
-    return dur, (c[1] if c else "")
+    return dur, (c[1] if c else ""), " Video: " in r.stdout
 
 
 # ---------------------------------------------------------------- trạng thái lưu giữa các lần chạy
@@ -370,6 +372,216 @@ def download_all(entries, wdir):
     return ok
 
 
+# ---------------------------------------------------------------- mẫu quảng cáo: so sánh sóng
+# Kênh truyện audio hay chèn cùng 1 đoạn thu sẵn (quảng cáo, câu quảng bá) nhiều lần. Người dùng lấy 1 mẫu
+# (khoảng thời gian trong video YouTube) -> so đường năng lượng dB (mỗi 32 ms) của mẫu với từng video ->
+# chỗ nào giống ≥ adMatch % thì cắt đúng bằng độ dài mẫu (khi ghép, -c copy, không mã hoá lại).
+AHOP = 0.032
+
+
+def envelope(path, ss=0.0, to=None, speed=1.0):
+    """Mức năng lượng (dB) mỗi khung 32 ms của đoạn [ss, to] (giây). speed ≠ 1: co giãn trước khi đo."""
+    rng = ["-ss", "%.3f" % ss] + (["-to", "%.3f" % to] if to else [])
+    af = (atempo(speed) + ",") if abs(speed - 1) > 0.005 else ""
+    r = subprocess.run([P["ffmpeg"], "-v", "error", *rng, "-i", path, "-vn", "-af",
+                        af + "aresample=8000,asetnsamples=n=256:p=0,astats=metadata=1:reset=1:measure_perchannel=none:"
+                        "measure_overall=RMS_level,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+                        "-f", "null", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return [max(-70.0, float(x)) if x not in ("-inf", "inf", "nan") else -70.0
+            for x in re.findall(r"RMS_level=(\S+)", r.stdout)]
+
+
+def _corr(x, y):
+    n = len(x)
+    mx = sum(x) / n; my = sum(y) / n; sxy = sx = sy = 0.0
+    for a, b in zip(x, y):
+        a -= mx; b -= my; sxy += a * b; sx += a * a; sy += b * b
+    return sxy / math.sqrt(sx * sy + 1e-9)
+
+
+def _avg4(x):
+    return [(x[i] + x[i + 1] + x[i + 2] + x[i + 3]) / 4 for i in range(0, len(x) - 3, 4)]
+
+
+def find_matches(e, t, thr):
+    """Các chỗ (khung đầu, khung cuối) trong e giống mẫu t: quét thô 128 ms, chỉnh ±6 khung, kiểm tra cả đoạn."""
+    m = len(t)
+    E, T = _avg4(e), _avg4(t)
+    mc = len(T)
+    if mc < 8 or len(E) < mc: return []
+    score = [_corr(T, E[j:j + mc]) for j in range(len(E) - mc + 1)]
+    cand = sorted((j for j, sc in enumerate(score) if sc > thr - 0.1), key=lambda j: -score[j])
+    out = []
+    for j in cand:
+        if any(abs(j * 4 - a) < m for a, _ in out): continue      # đã có chỗ khớp tốt hơn đè lên
+        best, f0 = max((_corr(t, e[f:f + m]), f) for f in range(max(0, j * 4 - 6), min(len(e) - m, j * 4 + 6) + 1))
+        if best >= thr: out.append((f0, f0 + m))
+    return sorted(out)
+
+
+def ads_dir():
+    """Thư viện mẫu (lưu lâu dài cạnh cache yt-dlp, không bị dọn khi chạy)."""
+    d = os.path.join(os.path.dirname(P["cache"].rstrip("/")), "ads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def load_templates(speed=1.0):
+    """Đường năng lượng các mẫu đã chọn (bỏ khoảng lặng 2 đầu). speed: tốc độ của file sẽ đem so."""
+    temps = []
+    for aid in P.get("adIds") or []:
+        f = os.path.join(ads_dir(), re.sub(r"[^\w-]", "", str(aid)) + ".m4a")
+        if not os.path.exists(f):
+            log("Không thấy mẫu %s (đã xoá?) — bỏ qua" % aid); continue
+        ev = envelope(f, speed=speed)
+        while ev and ev[0] < -62: ev.pop(0)
+        while ev and ev[-1] < -62: ev.pop()
+        if len(ev) * AHOP >= 2: temps.append(ev)
+    return temps
+
+
+def ad_cuts(env, temps, ss, thr):
+    """Các khoảng cần cắt (giây, theo file gốc) của 1 file có đường năng lượng env bắt đầu tại giây ss."""
+    cuts = sorted((ss + a * AHOP, ss + b * AHOP) for t in temps for a, b in find_matches(env, t, thr))
+    merged = []
+    for x, y in cuts:
+        if merged and x < merged[-1][1]: merged[-1] = (merged[-1][0], max(y, merged[-1][1]))
+        else: merged.append((x, y))
+    return merged
+
+
+def fmt_t(x):
+    return "%d:%02d" % divmod(int(x), 60)
+
+
+def find_ads(vids):
+    """Gắn r["cuts"] cho từng video theo các mẫu đã chọn."""
+    t0 = time.time()
+    status("Tìm đoạn giống mẫu…")
+    temps = load_templates()
+    if not temps: return
+    thr = P["adMatch"] / 100
+    with ThreadPoolExecutor(max_workers=CORES) as ex:
+        envs = list(ex.map(lambda r: envelope(r["path"], *keep_range(r)), vids))
+    check_cancel()
+    total = 0.0
+    for r, ev in zip(vids, envs):
+        r["cuts"] = ad_cuts(ev, temps, keep_range(r)[0], thr)
+        total += sum(y - x for x, y in r["cuts"])
+        if r["cuts"]:
+            log("[%d] Cắt %d đoạn giống mẫu: %s" % (r["entry"]["n"] + 1, len(r["cuts"]),
+                ", ".join(fmt_t(x) for x, _ in r["cuts"])))
+    log("Cắt đoạn giống mẫu (%d mẫu): tổng %.0fs trong %.1fs" % (len(temps), total, secs(t0)))
+
+
+def keep_parts(r, a, end):
+    """Các khoảng giữ lại trong [a, end] sau khi bỏ r["cuts"]."""
+    out = []
+    for x, y in r.get("cuts", []):
+        if x > a + 0.05: out.append((a, min(x, end)))
+        a = max(a, y)
+    if end > a + 0.05: out.append((a, end))
+    return [(x, y) for x, y in out if y - x > 0.05]
+
+
+def concat_list(path, items):
+    """File danh sách concat demuxer: items = [(file, đầu, cuối)]."""
+    open(path, "w", encoding="utf-8").write("".join(
+        "file '%s'\ninpoint %.3f\noutpoint %.3f\n" % (q(f), x, y) for f, x, y in items))
+
+
+def fetch_audio(link, index, wdir):
+    """Tải audio 1 video (link video, hoặc link playlist + số thứ tự) vào wdir. Giữ lại để lấy nhiều mẫu."""
+    o = {**base_opts(), "format": "bestaudio[ext=m4a]/bestaudio/best", "continuedl": True, "updatetime": False,
+         "outtmpl": {"default": os.path.join(wdir, "%(id)s.%(ext)s")}}
+    if "list=" in link and index:
+        o.update({"noplaylist": False, "playlist_items": str(index)})
+    else:
+        o["noplaylist"] = True
+    if P.get("aria2c"):
+        o["external_downloader"] = {"default": P["aria2c"]}
+        o["external_downloader_args"] = {"aria2c": ["--console-log-level=error", "--ca-certificate=" + P["cert"]]}
+    last = None
+    for client in (["visionos"], None):          # visionos nhanh (không cần JS), lỗi thì chế độ đầy đủ
+        oo = dict(o)
+        if client: oo["extractor_args"] = {"youtube": {"player_client": client}}
+        for dl in (True, False):                  # aria2c lỗi -> trình tải thường
+            if not dl: oo.pop("external_downloader", None)
+            try:
+                with yt_dlp.YoutubeDL(oo) as y:
+                    info = y.extract_info(link, download=True)
+                if info.get("_type") == "playlist":
+                    info = next(e for e in info["entries"] if e)
+                rd = (info.get("requested_downloads") or [{}])[0]
+                path = rd.get("filepath") or info.get("filepath")
+                if path and os.path.exists(path): return path, info.get("title") or ""
+            except Exception as ex:  # noqa: BLE001
+                check_cancel()
+                last = ex
+                if is_bot(str(ex)): raise RuntimeError("YouTube bắt xác minh bot. Đổi mạng hoặc chờ vài giờ.")
+    raise RuntimeError("Không tải được video: %s" % (short(last) if last else "?"))
+
+
+def add_ad_mode():
+    """Lấy mẫu quảng cáo = đoạn [start, end] của 1 video YouTube -> lưu vào thư viện mẫu."""
+    aid = re.sub(r"[^\w-]", "", str(P.get("id") or int(time.time())))
+    ss, to = float(P.get("start") or 0), float(P.get("end") or 0)
+    if to - ss < 2: raise RuntimeError("Đoạn mẫu phải dài ít nhất 2 giây (Đến > Từ)")
+    wdir = os.path.join(P["work"], "sample")
+    os.makedirs(wdir, exist_ok=True)
+    status("Tải audio video chứa mẫu…")
+    t0 = time.time()
+    src, title = fetch_audio(P.get("link", ""), int(P.get("index") or 1), wdir)
+    for f in os.listdir(wdir):                     # chỉ giữ video vừa dùng (lấy tiếp mẫu khác khỏi tải lại)
+        if os.path.join(wdir, f) != src: os.remove(os.path.join(wdir, f))
+    log("Audio: %s (%.1fs)" % (title, secs(t0)))
+    dur = probe(src)[0]
+    if dur and to > dur: raise RuntimeError("Video chỉ dài %s, đoạn mẫu vượt quá" % fmt_t(dur))
+    out = os.path.join(ads_dir(), aid + ".m4a")
+    ffmpeg(["-ss", "%.3f" % ss, "-to", "%.3f" % to, "-i", src, "-vn", "-ac", "1", "-ar", "16000",
+            "-c:a", "aac", "-b:a", "48k", out])
+    if sum(1 for x in envelope(out) if x > -50) * AHOP < 1.5:
+        os.remove(out)
+        raise RuntimeError("Đoạn mẫu gần như im lặng, kiểm tra lại thời gian")
+    log("Đã lưu mẫu \"%s\": %s–%s (%.1f giây) của %s" % (P.get("label") or aid, fmt_t(ss), fmt_t(to), to - ss, title))
+    progress(1.0)
+
+
+def cut_ads_mode():
+    """Cắt mọi đoạn giống mẫu trong 1 file có sẵn (copy, không mã hoá lại; giữ ảnh bìa + thông tin)."""
+    src = P["input"]
+    temps = load_templates(float(P.get("fileSpeed") or 1) or 1.0)
+    if not temps: raise RuntimeError("Chưa chọn mẫu nào")
+    wdir = os.path.join(P["work"], "cut")
+    shutil.rmtree(wdir, ignore_errors=True)
+    os.makedirs(wdir, exist_ok=True)
+    os.makedirs(P["out"], exist_ok=True)
+    status("Tìm đoạn giống mẫu…")
+    t0 = time.time()
+    dur, _, pic = probe(src)
+    r = {"cuts": ad_cuts(envelope(src), temps, 0.0, P["adMatch"] / 100)}
+    check_cancel()
+    if not r["cuts"]:
+        raise RuntimeError("Không thấy đoạn nào giống mẫu (thử giảm Độ giống hoặc kiểm tra Tốc độ file)")
+    log("Cắt %d đoạn (%.0fs): %s · tìm %.1fs" % (len(r["cuts"]), sum(y - x for x, y in r["cuts"]),
+        ", ".join("%s–%s" % (fmt_t(x), fmt_t(y)) for x, y in r["cuts"]), secs(t0)))
+    status("Cắt (không mã hoá)…")
+    lst = os.path.join(wdir, "list.txt")
+    concat_list(lst, [(src, x, y) for x, y in keep_parts(r, 0.0, dur)])
+    joined = os.path.join(wdir, "joined.mka")
+    ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-map", "0:a", "-c", "copy", joined])
+    name = P.get("name") or os.path.basename(src)
+    ext = os.path.splitext(name)[1][1:].lower() or "m4a"
+    out = os.path.join(P["out"], "cut." + ext)
+    args = ["-i", joined, "-i", src, "-map", "0:a"] + (["-map", "1:v"] if pic else [])
+    args += ["-map_metadata", "1", "-c", "copy"] + (["-disposition:v", "attached_pic"] if pic else [])
+    args += ["-id3v2_version", "3"] if ext == "mp3" else []
+    ffmpeg(args + [out])
+    emit("FILE", out, name, MIME.get(ext, "audio/mpeg"),
+         ("uri:" + P["inputUri"]) if P.get("overwrite") and P.get("inputUri") else "")
+    progress(1.0)
+
+
 # ---------------------------------------------------------------- xử lý
 def keep_range(r):
     """Khoảng giữ lại (giây, theo file gốc) sau khi cắt đầu/cuối."""
@@ -493,6 +705,13 @@ def main():
             log("[%d] Bỏ qua: video dài %ds, cắt xong không còn gì" % (r["entry"]["n"] + 1, r["duration"]))
     if not valid:
         raise RuntimeError("Không còn video nào sau khi cắt")
+    if P.get("adIds"):
+        try:
+            find_ads(valid)
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log("Bỏ qua bước cắt đoạn giống mẫu (lỗi: %s)" % short(e))
 
     groups = [valid[i:i + P["group"]] for i in range(0, len(valid), P["group"])]
     start = max(0, P["partStart"])                    # đánh số phần bắt đầu từ
@@ -514,11 +733,11 @@ def main():
         # 1) Cắt + ghép KHÔNG mã hoá (concat demuxer inpoint/outpoint, -c copy) -> 1 file .mka
         status("Cắt + ghép %d/%d (không mã hoá)…" % (g + 1, len(groups)))
         lst = os.path.join(wdir, "concat_%d.txt" % g)
-        open(lst, "w", encoding="utf-8").write("".join(
-            "file '%s'\ninpoint %.3f\noutpoint %.3f\n" % ((q(r["path"]),) + keep_range(r)) for r in vids))
+        items = [(r["path"], x, y) for r in vids for x, y in keep_parts(r, *keep_range(r))]
+        concat_list(lst, items)
         joined = os.path.join(wdir, "joined_%d.mka" % g)
         ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-map", "0:a", "-c", "copy", joined])
-        jdur = sum(keep_of(r) for r in vids)
+        jdur = sum(y - x for _, x, y in items)
         log("Ghép %d video (%.0f phút) không mã hoá: %.1fs" % (len(vids), jdur / 60, secs(tg)))
 
         # 2) Tốc độ (bắt buộc mã hoá lại AAC). Tốc độ 1 và nguồn đã là AAC thì giữ nguyên, khỏi mã hoá.
@@ -620,7 +839,7 @@ def tag_mode():
 
 if __name__ == "__main__":
     try:
-        tag_mode() if P.get("mode") == "tag" else main()
+        {"tag": tag_mode, "addAd": add_ad_mode, "cutAds": cut_ads_mode}.get(P.get("mode"), main)()
     except Cancelled:
         emit("ERROR", "Đã dừng")
         sys.exit(130)

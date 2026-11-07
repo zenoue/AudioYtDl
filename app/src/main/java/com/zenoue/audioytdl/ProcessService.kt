@@ -64,8 +64,11 @@ class ProcessService : Service() {
         scope.launch {
             val msg = try {
                 val files = p.run()
-                if (params.optString("mode") == "tag") "Đã ghi ảnh bìa / thông tin"
-                else "Hoàn thành ${files.size} file → " + params.optString("saveLabel").ifEmpty { "Download/Audio" }
+                when (params.optString("mode")) {
+                    "tag" -> "Đã ghi ảnh bìa / thông tin"
+                    "addAd" -> "Đã lưu mẫu"
+                    else -> "Hoàn thành ${files.size} file → " + params.optString("saveLabel").ifEmpty { "Download/Audio" }
+                }
             } catch (e: CancelledByUser) {
                 "Đã dừng"
             } catch (e: Throwable) {

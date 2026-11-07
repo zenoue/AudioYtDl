@@ -227,6 +227,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        /** Thư viện mẫu quảng cáo (engine lưu filesDir/ads/<id>.m4a): danh sách id có file / xoá 1 mẫu. */
+        @JavascriptInterface fun adFiles(): String =
+            org.json.JSONArray(File(filesDir, "ads").listFiles()?.map { it.nameWithoutExtension } ?: emptyList<String>()).toString()
+        @JavascriptInterface fun adDelete(id: String) { File(filesDir, "ads/${id.replace(Regex("[^\\w-]"), "")}.m4a").delete() }
+
         @JavascriptInterface fun toast(msg: String) = runOnUiThread { this@MainActivity.toast(msg) }
         @JavascriptInterface fun checkUpdate() = runOnUiThread { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
     }
