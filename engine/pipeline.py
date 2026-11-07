@@ -18,7 +18,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.3"
+ENGINE_VERSION = "0.0.4"
 
 import collections
 import hashlib
@@ -36,7 +36,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 P = json.load(open(sys.argv[1], encoding="utf-8"))
-for _k, _d in (("from", 1), ("count", 0), ("group", 10), ("partStart", 1)):
+for _k, _d in (("from", 1), ("count", 0), ("group", 10), ("partStart", 1), ("chapPer", 0)):
     P[_k] = int(P.get(_k) or _d)
 for _k, _d in (("trimStart", 0.0), ("trimEnd", 0.0), ("speed", 1.0), ("adMatch", 85.0)):
     P[_k] = float(P.get(_k) or _d)
@@ -674,6 +674,7 @@ def speed_up(src, dur, wdir, g, ngroups):
 DEFAULT_TPL = {
     "nameTpl": "{sach}_{phan}_v{tu}-{den}",       # tên file (không cần đuôi)
     "titleTpl": "{phan}. {gon}",                   # tên từng phần (TIT2) = tên chương trong app nghe
+    "markTpl": "{gon}",                            # tên chương con (mỗi video) bên trong file
     "bookTpl": "{playlist}",                       # tên sách
     "authorTpl": "{kenh}",                         # tác giả
 }
@@ -766,6 +767,14 @@ def main():
     book = render(tpl["bookTpl"], book_vals) or playlist      # giống nhau ở mọi phần (app nghe lấy từ file đầu)
     folder = ("dir:" + sanitize(book)[:100]) if P.get("bookFolder", True) else ""
     gon = dict(zip((e["n"] for e in entries), short_titles([e["title"] for e in entries])))
+    # số chương tính theo thứ tự video (không đọc từ tên video): video "Từ video" bắt đầu ở chương chapStart,
+    # mỗi video chapPer chương. chapStart để trống = tính như playlist bắt đầu từ chương 1.
+    per = max(0, P["chapPer"])
+    ch0 = int(P_get("chapStart", (P["from"] - 1) * per + 1))
+
+    def ch_vals(e1, e2):
+        if not per: return {"ch_tu": "", "ch_den": ""}
+        return {"ch_tu": ch0 + (e1["index"] - P["from"]) * per, "ch_den": ch0 + (e2["index"] - P["from"] + 1) * per - 1}
     os.makedirs(P["out"], exist_ok=True)
 
     for g, vids in enumerate(groups):
@@ -782,7 +791,9 @@ def main():
         jdur = sum(y - x for _, x, y in items)
         marks, t = [], 0.0                       # chương = từng video (giây trong file đã tăng tốc)
         for r in vids:
-            marks.append((t / P["speed"], gon[r["entry"]["n"]]))
+            e = r["entry"]
+            marks.append((t / P["speed"], render(tpl["markTpl"], dict(
+                book_vals, sach=book, tu=e["index"], den=e["index"], gon=gon[e["n"]], ten=e["title"], **ch_vals(e, e)))))
             t += sum(y - x for x, y in keep_parts(r, *keep_range(r)))
         log("Ghép %d video (%.0f phút) không mã hoá: %.1fs" % (len(vids), jdur / 60, secs(tg)))
 
@@ -800,7 +811,7 @@ def main():
                 "ten": first["title"] + (" → " + last["title"] if len(vids) > 1 else ""),
                 "gon_dau": gon[first["n"]], "gon_cuoi": gon[last["n"]],
                 "gon": gon[first["n"]] + (" → " + gon[last["n"]] if len(vids) > 1 else ""),
-                "ngay": today, "ext": "m4a", "sach": book}
+                "ngay": today, "ext": "m4a", "sach": book, **ch_vals(first, last)}
         name = sanitize(render(tpl["nameTpl"], vals))[:150]
         if not name.lower().endswith(".m4a"):
             name += ".m4a"
