@@ -18,7 +18,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.4"
+ENGINE_VERSION = "0.0.5"
 
 import collections
 import hashlib
@@ -668,13 +668,12 @@ def speed_up(src, dur, wdir, g, ngroups):
 #   Thể loại -> genre (TCON / ©gen)
 # Mỗi phần: title = "{phan}. {gon}", track = phần/tổng để trình phát xếp đúng thứ tự.
 # App Voice: 1 thư mục = 1 sách, file = chương (xếp theo tên file), tên sách = album của file đầu, tác giả = artist,
-# tên chương = title; chương bên trong file đọc từ chpl / chapter track của m4a -> mỗi video 1 chương.
+# tên chương = title.
 # Vì vậy tên sách chỉ dùng biến chung của cả sách (giống nhau ở mọi phần) và mỗi sách lưu 1 thư mục con.
 # Số phần bắt đầu từ partStart (vd 11 khi sách đã có phần 1–10).
 DEFAULT_TPL = {
     "nameTpl": "{sach}_{phan}_v{tu}-{den}",       # tên file (không cần đuôi)
     "titleTpl": "{phan}. {gon}",                   # tên từng phần (TIT2) = tên chương trong app nghe
-    "markTpl": "{gon}",                            # tên chương con (mỗi video) bên trong file
     "bookTpl": "{playlist}",                       # tên sách
     "authorTpl": "{kenh}",                         # tác giả
 }
@@ -704,16 +703,6 @@ def short_titles(titles):
         x = x[:-len(suf)] if suf and x.endswith(suf) else x
         out.append(x.strip(" -–—|:·,") or t)
     return out
-
-
-def chapters_file(path, marks, total):
-    """File ffmetadata chương: marks = [(giây bắt đầu, tên)]."""
-    esc = lambda v: re.sub(r"([=;#\\\n])", r"\\\1", v)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(";FFMETADATA1\n")
-        for i, (t, name) in enumerate(marks):
-            end = marks[i + 1][0] if i + 1 < len(marks) else total
-            f.write("[CHAPTER]\nTIMEBASE=1/1000\nSTART=%d\nEND=%d\ntitle=%s\n" % (t * 1000, end * 1000, esc(name)))
 
 
 def render(tpl, vals):
@@ -757,6 +746,8 @@ def main():
     last_part = len(groups) + start - 1
     width = max(2, len(str(last_part)))
     tpl = {k: P_get(k, d) for k, d in DEFAULT_TPL.items()}
+    if P["chapPer"] > 0 and not P_get("titleTpl"):
+        tpl["titleTpl"] = "{ch_tu}~{ch_den}"
     playlist = meta["title"] or entries[0]["title"]
     channel = meta["uploader"] or playlist
     genre = P_get("genre", "Audiobook")
@@ -767,8 +758,8 @@ def main():
     book = render(tpl["bookTpl"], book_vals) or playlist      # giống nhau ở mọi phần (app nghe lấy từ file đầu)
     folder = ("dir:" + sanitize(book)[:100]) if P.get("bookFolder", True) else ""
     gon = dict(zip((e["n"] for e in entries), short_titles([e["title"] for e in entries])))
-    # số chương tính theo thứ tự video (không đọc từ tên video): video "Từ video" bắt đầu ở chương chapStart,
-    # mỗi video chapPer chương. chapStart để trống = tính như playlist bắt đầu từ chương 1.
+    # số đếm theo thứ tự video (không đọc từ tên video): video "Từ video" bắt đầu ở số chapStart, mỗi video chapPer số.
+    # chapStart trống = video 1 bắt đầu từ 1. Chữ đi kèm (Chương, Tập…) người dùng tự gõ trong mẫu.
     per = max(0, P["chapPer"])
     ch0 = int(P_get("chapStart", (P["from"] - 1) * per + 1))
 
@@ -789,12 +780,6 @@ def main():
         joined = os.path.join(wdir, "joined_%d.mka" % g)
         ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-map", "0:a", "-c", "copy", joined])
         jdur = sum(y - x for _, x, y in items)
-        marks, t = [], 0.0                       # chương = từng video (giây trong file đã tăng tốc)
-        for r in vids:
-            e = r["entry"]
-            marks.append((t / P["speed"], render(tpl["markTpl"], dict(
-                book_vals, sach=book, tu=e["index"], den=e["index"], gon=gon[e["n"]], ten=e["title"], **ch_vals(e, e)))))
-            t += sum(y - x for x, y in keep_parts(r, *keep_range(r)))
         log("Ghép %d video (%.0f phút) không mã hoá: %.1fs" % (len(vids), jdur / 60, secs(tg)))
 
         # 2) Tốc độ (bắt buộc mã hoá lại AAC). Tốc độ 1 và nguồn đã là AAC thì giữ nguyên, khỏi mã hoá.
@@ -818,13 +803,7 @@ def main():
         out = os.path.join(P["out"], "final_%d.m4a" % g)
         cover = make_cover(wdir, first["index"])
         args = ["-i", audio] + (["-i", cover] if cover else [])
-        maps = ["-map", "0:a"] + (["-map", "1:v"] if cover else [])
-        if P.get("chapters", True) and len(vids) > 1:
-            chap = os.path.join(wdir, "chap_%d.txt" % g)
-            chapters_file(chap, marks, jdur / P["speed"])
-            args += ["-i", chap]
-            maps += ["-map_chapters", "2" if cover else "1"]
-        args += maps + ["-c", "copy"]
+        args += ["-map", "0:a"] + (["-map", "1:v"] if cover else []) + ["-c", "copy"]
         tags = [("title", render(tpl["titleTpl"], vals)), ("album", book), ("album_artist", author), ("artist", author),
                 ("genre", genre), ("track", "%d/%d" % (part, last_part))]
         for k, v in tags:

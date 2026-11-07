@@ -34,8 +34,8 @@ Kết quả: `Download/Audio/<Tên sách>/<tên playlist>_01_v1-10.m4a`, … kè
 
 ## Nghe bằng Voice (hoặc app nghe sách khác)
 - Voice: 1 thư mục = 1 sách, mỗi file = 1 chương (xếp theo tên file). Tên sách = Album của file đầu, tác giả = Artist, tên chương = Title.
-- App ghi đúng như vậy: Album giống nhau ở mọi phần, mỗi sách 1 thư mục con, Title = `{phan}. {gon}` (tên video rút gọn, vd `01. Tập 001 → Tập 002`).
-- Mỗi file có chương con theo từng video (chpl + chapter track của m4a), trong Voice tua tới từng tập được.
+- App ghi đúng như vậy: Album giống nhau ở mọi phần, mỗi sách 1 thư mục con, Title = `{phan}. {gon}` (tên video rút gọn).
+- *Đếm mỗi video* (vd 10) → Title mặc định chỉ là số `{ch_tu}~{ch_den}` (vd `1~20`); chữ đi kèm (Chương, Tập…) tự gõ vào mẫu.
 - Trong Voice thêm thư mục `Download/Audio` kiểu *thư mục chứa nhiều sách*.
 
 ## Bị YouTube chặn ("Sign in to confirm you're not a bot")
