@@ -18,7 +18,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.6"
+ENGINE_VERSION = "0.0.7"
 
 import collections
 import hashlib
@@ -59,16 +59,6 @@ def status(s): emit("STATUS", s)
 def progress(f): emit("PROGRESS", "%.4f" % max(0.0, min(1.0, f)))
 
 
-# Tải / tìm mẫu / mã hoá chạy chồng nhau -> gom trạng thái + tiến độ của từng bước vào 1 dòng.
-_UI = {"dl": "", "ad": "", "enc": "", "p_dl": 0.0, "p_enc": 0.0}
-
-
-def ui(**kw):
-    _UI.update(kw)
-    status(" · ".join(_UI[k] for k in ("dl", "ad", "enc") if _UI[k]))
-    progress(0.35 * _UI["p_dl"] + 0.65 * _UI["p_enc"])
-
-
 T_ALL = time.time()
 def secs(t0): return time.time() - t0
 
@@ -77,17 +67,8 @@ def secs(t0): return time.time() - t0
 CANCEL = threading.Event()
 try:
     os.setpgrp()                         # ffmpeg / aria2c con cùng nhóm -> giết 1 lần là hết
-    OWN_PGRP = True
 except Exception:
-    OWN_PGRP = False
-
-
-def quit_now(code):
-    """Thoát ngay cả khi còn luồng tải / tìm mẫu chạy nền (giết luôn ffmpeg, aria2c con)."""
-    sys.stdout.flush()
-    if OWN_PGRP:
-        os.killpg(os.getpgrp(), signal.SIGKILL)
-    os._exit(code)
+    pass
 
 
 def _on_term(*_):
@@ -254,8 +235,7 @@ def fast_allowed():
     return time.time() - (state_get(FAST_KEY, 0) or 0) > 24 * 3600
 
 
-def download_all(entries, wdir, on_done):
-    """Tải song song; mỗi video xong (được / lỗi / bỏ qua) gọi on_done(entry, kết quả hoặc None) ngay."""
+def download_all(entries, wdir):
     total = len(entries)
     results = [None] * total
     expected = {}            # n -> số byte dự kiến
@@ -268,12 +248,6 @@ def download_all(entries, wdir, on_done):
         return [os.path.join(wdir, f) for f in os.listdir(wdir) if f.startswith("raw_%d." % idx)]
 
     def one(e):
-        try:
-            fetch(e)
-        finally:
-            on_done(e, results[e["n"]])
-
-    def fetch(e):
         n, idx = e["n"], e["index"]
         tag = "[%d/%d]" % (n + 1, total)
         side = os.path.join(wdir, "raw_%d.json" % idx)
@@ -383,18 +357,20 @@ def download_all(entries, wdir, on_done):
             now = time.time()
             sp = max(0, b - last_b) / max(now - last_t, 0.1)
             last_b, last_t = b, now
-            ui(dl="Tải %d/%d · %s/s" % (len(dn), total, human(sp)), p_dl=(len(dn) + part) / total)
+            progress(0.45 * (len(dn) + part) / total)
+            status("Tải %d/%d · %s/s" % (len(dn), total, human(sp)))
 
-    ui(dl="Tải %d video…" % total)
+    status("Tải %d video…" % total)
     th = threading.Thread(target=monitor, daemon=True)
     th.start()
     with ThreadPoolExecutor(max_workers=min(10, total)) as ex:
         list(ex.map(one, entries))
     stop.set()
-    ok = [r for r in results if r]
+    check_cancel()
+    ok = [dict(r, entry=entries[i]) for i, r in enumerate(results) if r]
     mb = sum(os.path.getsize(r["path"]) for r in ok) / 1048576
     log("Tải xong %d/%d video, %.0fMB trong %.1fs" % (len(ok), total, mb, secs(t0)))
-    ui(dl="", p_dl=1.0)
+    return ok
 
 
 # ---------------------------------------------------------------- mẫu quảng cáo: so sánh sóng
@@ -477,6 +453,26 @@ def ad_cuts(env, temps, ss, thr):
 
 def fmt_t(x):
     return "%d:%02d" % divmod(int(x), 60)
+
+
+def find_ads(vids):
+    """Gắn r["cuts"] cho từng video theo các mẫu đã chọn."""
+    t0 = time.time()
+    status("Tìm đoạn giống mẫu…")
+    temps = load_templates()
+    if not temps: return
+    thr = P["adMatch"] / 100
+    with ThreadPoolExecutor(max_workers=CORES) as ex:
+        envs = list(ex.map(lambda r: envelope(r["path"], *keep_range(r)), vids))
+    check_cancel()
+    total = 0.0
+    for r, ev in zip(vids, envs):
+        r["cuts"] = ad_cuts(ev, temps, keep_range(r)[0], thr)
+        total += sum(y - x for x, y in r["cuts"])
+        if r["cuts"]:
+            log("[%d] Cắt %d đoạn giống mẫu: %s" % (r["entry"]["n"] + 1, len(r["cuts"]),
+                ", ".join(fmt_t(x) for x, _ in r["cuts"])))
+    log("Cắt đoạn giống mẫu (%d mẫu): tổng %.0fs trong %.1fs" % (len(temps), total, secs(t0)))
 
 
 def keep_parts(r, a, end):
@@ -637,7 +633,7 @@ def speed_up(src, dur, wdir, g, ngroups):
     last = [0.0]
     flt = atempo(P["speed"])
     coder = "fast" if P.get("fastAac", True) else "twoloop"
-    ui(enc="Tăng tốc %d/%d…" % (g + 1, ngroups))
+    status("Tăng tốc %.2fx: %.0f phút audio trên %d nhân…" % (P["speed"], dur / 60, CORES))
     parts = [os.path.join(wdir, "sp_%d_%02d.m4a" % (g, i)) for i in range(n)]
 
     def job(i):
@@ -647,8 +643,9 @@ def speed_up(src, dur, wdir, g, ngroups):
             if now - last[0] > 0.4:
                 last[0] = now
                 d = sum(done.values())
-                ui(enc="Tăng tốc %d/%d: %.0f%% · %.0fx realtime" % (g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1)),
-                   p_enc=(g + 0.9 * d / total_out) / ngroups)
+                progress(0.45 + 0.55 * (g + 0.9 * d / total_out) / ngroups)
+                status("Tăng tốc %d/%d: %.0f%% · %.0fx realtime · %d nhân" % (
+                    g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1), CORES))
         ffmpeg(["-threads", "1", "-ss", "%.3f" % (i * ln), "-t", "%.3f" % ln, "-i", src, "-vn", "-af", flt,
                 "-c:a", "aac", "-aac_coder", coder, "-b:a", "128k", parts[i]], on_t)
 
@@ -726,72 +723,27 @@ def main():
         full = os.path.join(P["work"], d)
         if d != key and os.path.isdir(full): shutil.rmtree(full, ignore_errors=True)
 
-    # Chạy chồng: tải (chờ mạng) ở luồng nền; video nào tải xong thì tìm đoạn giống mẫu ngay;
-    # nhóm nào đủ video (theo thứ tự trong playlist) thì ghép + tăng tốc luôn trong lúc các video sau còn tải.
-    temps = []
+    raws = download_all(entries, wdir)
+    if not raws:
+        raise RuntimeError("YouTube đang chặn (bắt xác minh bot). Đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ rồi chạy lại."
+                           if BOT.is_set() else "Không tải được video nào")
+    valid = sorted([r for r in raws if keep_of(r) > 1], key=lambda r: r["entry"]["n"])
+    for r in raws:
+        if keep_of(r) <= 1:
+            log("[%d] Bỏ qua: video dài %ds, cắt xong không còn gì" % (r["entry"]["n"] + 1, r["duration"]))
+    if not valid:
+        raise RuntimeError("Không còn video nào sau khi cắt")
     if P.get("adIds"):
         try:
-            temps = load_templates()
+            find_ads(valid)
+        except Cancelled:
+            raise
         except Exception as e:  # noqa: BLE001
-            log("Bỏ qua cắt đoạn giống mẫu (lỗi đọc mẫu: %s)" % short(e))
-    thr = P["adMatch"] / 100
-    plan = [entries[i:i + P["group"]] for i in range(0, len(entries), P["group"])]
-    ready, reported, got = {}, set(), [0]
-    cond = threading.Condition()
-    ad_pool = ThreadPoolExecutor(max_workers=max(1, CORES // 2))    # chừa nhân cho bước tăng tốc chạy cùng lúc
-    ad = {"todo": 0, "done": 0, "cut": 0.0, "t": 0.0}
+            log("Bỏ qua bước cắt đoạn giống mẫu (lỗi: %s)" % short(e))
 
-    def finish(n, r):
-        with cond:
-            ready[n] = r
-            cond.notify_all()
-
-    def detect(r):
-        t0 = time.time()
-        try:
-            ss, to = keep_range(r)
-            r["cuts"] = ad_cuts(envelope(r["path"], ss, to), temps, ss, thr)
-            if r["cuts"]:
-                log("[%d] Cắt %d đoạn giống mẫu: %s" % (r["entry"]["n"] + 1, len(r["cuts"]),
-                    ", ".join(fmt_t(x) for x, _ in r["cuts"])))
-            ad["cut"] += sum(y - x for x, y in r["cuts"])
-        except Exception as e:  # noqa: BLE001
-            if not CANCEL.is_set(): log("[%d] Bỏ qua tìm mẫu (lỗi: %s)" % (r["entry"]["n"] + 1, short(e)))
-        finally:
-            with cond:
-                ad["done"] += 1; ad["t"] += secs(t0)
-                ui(ad="Tìm mẫu %d/%d" % (ad["done"], ad["todo"]) if ad["done"] < ad["todo"] else "")
-            finish(r["entry"]["n"], r)
-
-    def on_done(e, r):
-        reported.add(e["n"])
-        if r:
-            got[0] += 1
-            r = dict(r, entry=e)
-            if keep_of(r) <= 1:
-                log("[%d] Bỏ qua: video dài %ds, cắt xong không còn gì" % (e["n"] + 1, r["duration"])); r = None
-        if r and temps:
-            with cond: ad["todo"] += 1
-            ad_pool.submit(detect, r)
-        else:
-            finish(e["n"], r)
-
-    dl_err = []
-
-    def dl():
-        try:
-            download_all(entries, wdir, on_done)
-        except BaseException as ex:  # noqa: BLE001
-            dl_err.append(ex)
-        finally:
-            for e in entries:                 # phòng hờ: video chưa được báo -> coi như lỗi để không chờ mãi
-                if e["n"] not in reported: finish(e["n"], None)
-
-    th = threading.Thread(target=dl, daemon=True)
-    th.start()
-
+    groups = [valid[i:i + P["group"]] for i in range(0, len(valid), P["group"])]
     start = max(0, P["partStart"])                    # đánh số phần bắt đầu từ
-    last_part = len(plan) + start - 1
+    last_part = len(groups) + start - 1
     width = max(2, len(str(last_part)))
     tpl = {k: P_get(k, d) for k, d in DEFAULT_TPL.items()}
     if P["chapPer"] > 0 and not P_get("titleTpl"):
@@ -816,20 +768,12 @@ def main():
         return {"ch_tu": ch0 + (e1["index"] - P["from"]) * per, "ch_den": ch0 + (e2["index"] - P["from"] + 1) * per - 1}
     os.makedirs(P["out"], exist_ok=True)
 
-    made = 0
-    for g, want in enumerate(plan):
-        with cond:                                # chờ các video của nhóm này tải (+ tìm mẫu) xong
-            while not all(e["n"] in ready for e in want):
-                cond.wait(0.5)
-                check_cancel()
+    for g, vids in enumerate(groups):
         check_cancel()
-        vids = [ready[e["n"]] for e in want if ready[e["n"]]]
-        if not vids:
-            log("Phần %d: không có video nào dùng được — bỏ qua" % (g + start)); continue
         first, last = vids[0]["entry"], vids[-1]["entry"]
         tg = time.time()
         # 1) Cắt + ghép KHÔNG mã hoá (concat demuxer inpoint/outpoint, -c copy) -> 1 file .mka
-        ui(enc="Ghép %d/%d…" % (g + 1, len(plan)))
+        status("Cắt + ghép %d/%d (không mã hoá)…" % (g + 1, len(groups)))
         lst = os.path.join(wdir, "concat_%d.txt" % g)
         items = [(r["path"], x, y) for r in vids for x, y in keep_parts(r, *keep_range(r))]
         concat_list(lst, items)
@@ -842,7 +786,7 @@ def main():
         if abs(P["speed"] - 1) < 0.005 and probe(joined)[1] == "aac":
             audio = joined
         else:
-            audio = speed_up(joined, jdur, wdir, g, len(plan))
+            audio = speed_up(joined, jdur, wdir, g, len(groups))
 
         # 3) Ảnh bìa + thông tin (copy)
         part = g + start
@@ -874,19 +818,9 @@ def main():
         emit("FILE", out, name, "audio/mp4", "", folder)     # app lưu file (vào thư mục con của sách) rồi xoá
         for x in {joined, audio}:
             if os.path.exists(x): os.remove(x)
-        made += 1
         log("Phần %d xong: %.1fs" % (g + 1, secs(tg)))
-        ui(enc="", p_enc=(g + 1) / len(plan))
+        progress(0.45 + 0.55 * (g + 1) / len(groups))
 
-    th.join()
-    ad_pool.shutdown()
-    if dl_err: raise dl_err[0]
-    if temps:
-        log("Cắt đoạn giống mẫu (%d mẫu): tổng %.0fs, tìm %.1fs (chạy song song lúc tải)" % (len(temps), ad["cut"], ad["t"]))
-    if not made:
-        raise RuntimeError("YouTube đang chặn (bắt xác minh bot). Đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ rồi chạy lại."
-                           if BOT.is_set() and not got[0] else
-                           "Không tải được video nào" if not got[0] else "Không còn video nào sau khi cắt")
     shutil.rmtree(wdir, ignore_errors=True)
     progress(1.0)
     log("TỔNG THỜI GIAN: %.1fs" % secs(T_ALL))
@@ -948,7 +882,7 @@ if __name__ == "__main__":
         {"tag": tag_mode, "addAd": add_ad_mode, "cutAds": cut_ads_mode}.get(P.get("mode"), main)()
     except Cancelled:
         emit("ERROR", "Đã dừng")
-        quit_now(130)
+        sys.exit(130)
     except Exception as e:  # noqa: BLE001
         emit("ERROR", short(e))
-        quit_now(1)
+        sys.exit(1)
