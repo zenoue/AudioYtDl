@@ -9,7 +9,7 @@
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 2, UI_VERSION = "0.0.6";</script>
+<script>const UI_API = 2, UI_VERSION = "0.0.7";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -53,13 +53,16 @@ details{margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:0 
 details[open]{padding-bottom:8px}
 summary{padding:8px 0;font-size:13px;color:var(--text);cursor:pointer;list-style:none}
 summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{content:"▾ "}
+select{background:#000;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 6px;font-size:13px;flex:1;min-width:0}
+details.sec{margin-top:8px}
+details.sec>summary{font-weight:600}
 .help{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
 .help code{color:#d0d0d0;background:#1a1a1a;padding:0 3px;border-radius:3px}
 </style>
 </head>
 <body>
 <header><h1>Audio YtDl</h1><span class="ver" id="ver" title="Kiểm tra cập nhật"></span></header>
-<div class="tabs"><button id="tabDl" class="on">Tải playlist</button><button id="tabAd">Mẫu quảng cáo</button><button id="tabTag">Sửa tag</button></div>
+<div class="tabs"><button id="tabDl" class="on">Tải playlist</button><button id="tabAd">Mẫu quảng cáo</button><button id="tabTag">Sửa audio</button></div>
 
 <!-- ============ TAB TẢI ============ -->
 <section id="pDl">
@@ -78,7 +81,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
     <span class="small" style="flex:1">Định dạng: M4A (AAC)</span>
     <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
   </div>
-  <div class="row"><label class="chk" style="flex:1"><input type="checkbox" id="fastAac">Mã hoá nhanh (AAC fast, ~35% nhanh hơn)</label></div>
+  <div class="row"><span class="small">Mã hoá khi tăng tốc</span><select class="enc" id="encoder"></select></div>
   <div class="row"><span class="small" id="adUse" style="flex:1"></span><button class="link" id="adGo">Mẫu quảng cáo</button></div>
   <details id="meta">
     <summary>Thông tin sách (app nghe sách: Voice…)</summary>
@@ -114,7 +117,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
 
 <!-- ============ TAB MẪU QUẢNG CÁO ============ -->
 <section id="pAd" class="hide">
-  <h3 style="margin-top:0">1. Lấy mẫu từ video YouTube</h3>
+  <details class="sec" id="secAdNew" style="margin-top:0"><summary>Lấy mẫu từ video YouTube</summary>
   <div class="row"><div class="f" style="flex:3"><label>Link video / playlist</label><input id="adLink" class="l" inputmode="url"></div><div class="f"><label>Video số</label><input id="adIdx" inputmode="numeric" value="1"></div></div>
   <div class="row">
     <div class="f"><label>Từ (m:ss)</label><input id="adFrom" placeholder="13:38"></div>
@@ -124,40 +127,55 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
   <div class="row"><button class="btn" id="adAdd">Lấy mẫu</button></div>
   <div class="help">Xem video trên YouTube, ghi lại thời điểm bắt đầu – kết thúc của đoạn quảng cáo (nên 5–30 giây, đúng nguyên đoạn).
     Link playlist thì nhập thêm số thứ tự video. App tải audio video đó rồi cắt đoạn làm mẫu.</div>
-  <h3>2. Thư viện mẫu <span class="small" id="adCount"></span></h3>
+  </details>
+  <details class="sec" id="secAdLib"><summary>Thư viện mẫu <span class="small" id="adCount"></span></summary>
   <div class="help" id="adDir"></div>
   <div id="adList"></div>
   <div class="row"><div class="f" style="flex:none;width:130px"><label>Độ giống tối thiểu %</label><input id="adMatch" inputmode="numeric"></div>
     <span class="small" style="flex:1">Mẫu được tích sẽ dùng khi tải playlist và khi cắt file. Cắt nhầm thì tăng, sót thì giảm (75–95).</span></div>
-  <h3>3. Cắt đoạn giống mẫu trong file có sẵn</h3>
-  <div class="row"><button class="btn2" id="cutPick" style="flex:1">Chọn file audio</button></div>
-  <div class="small" id="cutName" style="margin-top:4px"></div>
-  <div class="row"><div class="f" style="flex:none;width:130px"><label>File đã tăng tốc ×</label><input id="cutSpeed" inputmode="decimal" value="1"></div>
-    <label class="chk" style="flex:1"><input type="checkbox" id="cutOver">Ghi đè file gốc</label></div>
-  <div class="row"><button class="btn" id="cutRun">Cắt đoạn giống mẫu</button></div>
-  <div class="help">Cắt không mã hoá lại, giữ ảnh bìa và thông tin. File app đã xuất ở tốc độ khác 1 thì nhập tốc độ đó (vd 1.25) để so đúng.
-    Không ghi đè thì lưu bản mới vào thư mục lưu.</div>
+  </details>
 </section>
 
-<!-- ============ TAB SỬA TAG ============ -->
+<!-- ============ TAB SỬA AUDIO ============ -->
 <section id="pTag" class="hide">
-  <div class="row" style="margin-top:0"><button class="btn2" id="tagPick" style="flex:1">1. Chọn file audio</button></div>
-  <div class="small" id="tagName" style="margin-top:4px"></div>
-  <div class="small" style="margin-top:8px">2. Ảnh bìa lấy từ</div>
-  <div class="radio">
-    <label><input type="radio" name="cs" value="yt" checked>Link YouTube</label>
-    <label><input type="radio" name="cs" value="image">Ảnh trong máy</label>
-    <label><input type="radio" name="cs" value="keep">Giữ nguyên</label>
-  </div>
-  <div class="row" id="tagYt"><div class="f" style="flex:3"><label>Link video / playlist</label><input id="tagLink" class="l"></div><div class="f"><label>Video số</label><input id="tagIdx" inputmode="numeric" value="1"></div></div>
-  <div class="row hide" id="tagImgRow"><button class="btn2" id="tagImg">Chọn ảnh</button></div>
-  <div class="row"><div class="thumb" id="tagPrev" style="width:120px;height:68px"></div></div>
-  <div class="small" style="margin-top:8px">3. Thông tin</div>
-  <div class="row"><div class="f"><label>Tên phần / chương → Title</label><input id="tTitle" class="l"></div></div>
-  <div class="row"><div class="f"><label>Tên sách → Album</label><input id="tAlbum" class="l"></div></div>
-  <div class="row"><div class="f"><label>Tác giả → Album Artist + Artist</label><input id="tArtist" class="l"></div></div>
-  <div class="row"><div class="f" style="flex:3"><label>Thể loại → Genre</label><input id="tGenre" class="l" placeholder="Audiobook"></div><div class="f"><label>Số thứ tự</label><input id="tTrack"></div></div>
-  <div class="row"><button class="btn" id="tagRun">Ghi vào file</button></div>
+  <div class="row" style="margin-top:0"><button class="btn2" id="auPick" style="flex:1">Chọn file audio</button></div>
+  <div class="small" id="auName" style="margin-top:4px">Chưa chọn file</div>
+
+  <details class="sec" id="secSpeed"><summary>Tăng tốc audio</summary>
+    <div class="row"><div class="f" style="flex:none;width:110px"><label>Tốc độ ×</label><input id="auSpeed" inputmode="decimal" value="1.5"></div>
+      <select class="enc" id="auEnc"></select></div>
+    <div class="row"><label class="chk"><input type="checkbox" id="auSpeedOver">Ghi đè file gốc (chỉ file m4a)</label></div>
+    <div class="row"><button class="btn" id="auSpeedRun">Tăng tốc</button></div>
+    <div class="help">Xuất m4a, giữ ảnh bìa + thông tin; không ghi đè thì lưu <code>tên_x1.5.m4a</code> vào thư mục lưu.
+      Chạy song song trên mọi nhân (CPU 1+3+4 như Dimensity 9500s: nhân lớn tự nhận thêm đoạn).
+      <b>MediaCodec</b> = bộ mã hoá AAC của Android / hãng chip; GPU không mã hoá được audio nên đây là lựa chọn phần cứng duy nhất.
+      Muốn biết cái nào nhanh hơn trên máy, chạy thử từng cái rồi so dòng "…x realtime" trong nhật ký.</div>
+  </details>
+
+  <details class="sec" id="secCut"><summary>Cắt đoạn giống mẫu</summary>
+    <div class="row"><div class="f" style="flex:none;width:130px"><label>File đã tăng tốc ×</label><input id="cutSpeed" inputmode="decimal" value="1"></div>
+      <label class="chk" style="flex:1"><input type="checkbox" id="cutOver">Ghi đè file gốc</label></div>
+    <div class="row"><button class="btn" id="cutRun">Cắt đoạn giống mẫu</button></div>
+    <div class="help">Dùng các mẫu đang tích ở tab Mẫu quảng cáo. Cắt không mã hoá lại, giữ ảnh bìa và thông tin.
+      File đã tăng tốc thì nhập tốc độ đó (vd 1.25) để so đúng. Không ghi đè thì lưu bản mới vào thư mục lưu.</div>
+  </details>
+
+  <details class="sec" id="secTag"><summary>Ảnh bìa &amp; thông tin</summary>
+    <div class="small" style="margin-top:4px">Ảnh bìa lấy từ</div>
+    <div class="radio">
+      <label><input type="radio" name="cs" value="yt" checked>Link YouTube</label>
+      <label><input type="radio" name="cs" value="image">Ảnh trong máy</label>
+      <label><input type="radio" name="cs" value="keep">Giữ nguyên</label>
+    </div>
+    <div class="row" id="tagYt"><div class="f" style="flex:3"><label>Link video / playlist</label><input id="tagLink" class="l"></div><div class="f"><label>Video số</label><input id="tagIdx" inputmode="numeric" value="1"></div></div>
+    <div class="row hide" id="tagImgRow"><button class="btn2" id="tagImg">Chọn ảnh</button></div>
+    <div class="row"><div class="thumb" id="tagPrev" style="width:120px;height:68px"></div></div>
+    <div class="row"><div class="f"><label>Tên phần / chương → Title</label><input id="tTitle" class="l"></div></div>
+    <div class="row"><div class="f"><label>Tên sách → Album</label><input id="tAlbum" class="l"></div></div>
+    <div class="row"><div class="f"><label>Tác giả → Album Artist + Artist</label><input id="tArtist" class="l"></div></div>
+    <div class="row"><div class="f" style="flex:3"><label>Thể loại → Genre</label><input id="tGenre" class="l" placeholder="Audiobook"></div><div class="f"><label>Số thứ tự</label><input id="tTrack"></div></div>
+    <div class="row"><button class="btn" id="tagRun">Ghi vào file</button></div>
+  </details>
 </section>
 
 <div class="bar"><div id="bar"></div></div>
@@ -193,7 +211,7 @@ for (const k of ["url","from","count","group","trimStart","trimEnd","speed"]) {
 }
 // ---- thông tin sách (Tên sách -> album, Tác giả -> album_artist + artist, Thể loại -> genre)
 const META = ["bookTpl","authorTpl","genre","chapPer","chapStart","titleTpl","nameTpl","partStart"];
-const OPTS = ["bookFolder","fastAac"];          // mặc định bật
+const OPTS = ["bookFolder"];          // mặc định bật
 const DEST = "Download/Audio";
 function preview(){
   const r0 = (t, v) => t.replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m);
@@ -213,6 +231,21 @@ function preview(){
     "Ví dụ: " + (P.bookFolder ? sach + "/" : "") + r0(P.nameTpl || $("nameTpl").placeholder, v) + ".m4a" +
     "  ·  Sách: " + sach + "  ·  Tác giả: " + b.tac_gia + "  ·  Title: " + r0(P.titleTpl || $("titleTpl").placeholder, v) +
     "  ·  Thể loại: " + (P.genre || "Audiobook");
+}
+// ---- bộ mã hoá khi tăng tốc (dùng chung cho tải playlist + tăng tốc file)
+if (!P.encoder) P.encoder = P.fastAac === false ? "twoloop" : "fast";
+const ENC = [["fast", "CPU · ffmpeg AAC nhanh"], ["twoloop", "CPU · ffmpeg AAC chất lượng cao (chậm hơn)"],
+  ["mediacodec", info.aacEnc ? "MediaCodec · " + info.aacEnc : "MediaCodec (cần cập nhật app)"]];
+for (const sel of document.querySelectorAll("select.enc")) {
+  for (const [v, t] of ENC) { const o = document.createElement("option"); o.value = v; o.textContent = t;
+    o.disabled = v === "mediacodec" && !info.aacEnc; sel.appendChild(o); }
+  sel.value = P.encoder === "mediacodec" && !info.aacEnc ? "fast" : P.encoder;
+  sel.onchange = () => { P.encoder = sel.value; for (const x of document.querySelectorAll("select.enc")) x.value = sel.value; save(); };
+}
+// ---- mục gập lại được: nhớ mục nào đang mở
+P.open = P.open || {secAdNew:true, secAdLib:true, secSpeed:true};
+for (const d of document.querySelectorAll("details.sec")) {
+  d.open = !!P.open[d.id]; d.ontoggle = () => { P.open[d.id] = d.open; save(); };
 }
 for (const k of OPTS) { if (P[k] === undefined) P[k] = true;
   $(k).checked = P[k]; $(k).onchange = () => { P[k] = $(k).checked; save(); preview(); }; }
@@ -235,8 +268,9 @@ $("savePick").onclick = () => !running && pick("folder", r => { P.saveTree = r.u
 $("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSave(); };
 
 function sync(){
-  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","tagPick",...META,...OPTS,
-    "adLink","adIdx","adFrom","adTo","adLabel","adAdd","adMatch","cutPick","cutSpeed","cutOver","cutRun"]) $(id).disabled = running;
+  for (const id of ["url","from","count","group","trimStart","trimEnd","speed","tagRun","auPick",...META,...OPTS,"encoder","auEnc",
+    "adLink","adIdx","adFrom","adTo","adLabel","adAdd","adMatch","cutSpeed","cutOver","cutRun","auSpeed","auSpeedOver","auSpeedRun"])
+    $(id).disabled = running;
   $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
 }
 const secs = s => String(s||"0").trim().split(":").reduce((a,x) => a*60 + (parseFloat(x)||0), 0);
@@ -250,7 +284,7 @@ $("run").onclick = () => {
     group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
     cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || DEST,
     nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "", titleTpl:P.titleTpl || "",
-    chapPer:parseInt(P.chapPer) || 0, chapStart:chapStart(), partStart:partStart(), bookFolder:P.bookFolder, fastAac:P.fastAac,
+    chapPer:parseInt(P.chapPer) || 0, chapStart:chapStart(), partStart:partStart(), bookFolder:P.bookFolder, encoder:P.encoder,
     ...adParams() }));
 };
 
@@ -305,26 +339,31 @@ $("adAdd").onclick = () => {
 // đọc lại thư mục khi mở tab / quay lại app (có thể vừa sửa bằng MiXplorer)
 $("tabAd").addEventListener("click", () => running || refreshAds());
 document.addEventListener("visibilitychange", () => document.hidden || running || refreshAds());
-let C = {};
-$("cutPick").onclick = () => pick("audio", r => { C.file = r; $("cutName").textContent = r.name; });
+// ---- tab sửa audio: 1 file dùng chung cho tăng tốc / cắt mẫu / ảnh bìa & thông tin
+let T = {};
+const outParams = () => ({saveTree:P.saveTree, saveLabel:P.saveLabel || DEST});
+$("auPick").onclick = () => pick("audio", r => { T.file = r; $("auName").textContent = r.name;
+  $("tTitle").value = r.title || r.name.replace(/\.[^.]+$/, ""); $("tAlbum").value = r.album || "";
+  $("tArtist").value = r.artist || ""; $("tTrack").value = r.track || "";
+  $("tagPrev").style.backgroundImage = r.preview ? `url(${r.preview})` : ""; });
+$("auSpeedRun").onclick = () => {
+  if (!T.file) return A.toast("Chọn file audio trước");
+  const sp = parseFloat(($("auSpeed").value || "").replace(",", "."));
+  if (!(sp >= 0.5 && sp <= 4) || sp === 1) return A.toast("Tốc độ nên trong khoảng 0.5 – 4 (khác 1)");
+  A.run(JSON.stringify({mode:"speedFile", input:T.file.path, inputUri:T.file.uri, name:T.file.name, fileSpeed:sp,
+    encoder:P.encoder, overwrite:$("auSpeedOver").checked, ...outParams()}));
+};
 $("cutRun").onclick = () => {
-  if (!C.file) return A.toast("Chọn file audio trước");
+  if (!T.file) return A.toast("Chọn file audio trước");
   if (!adOn().length) return A.toast("Tích ít nhất 1 mẫu trong thư viện");
   const sp = parseFloat(($("cutSpeed").value || "1").replace(",", ".")) || 1;
-  A.run(JSON.stringify({mode:"cutAds", input:C.file.path, inputUri:C.file.uri, name:C.file.name, fileSpeed:sp,
-    overwrite:$("cutOver").checked, ...adParams(), saveTree:P.saveTree, saveLabel:P.saveLabel || DEST}));
+  A.run(JSON.stringify({mode:"cutAds", input:T.file.path, inputUri:T.file.uri, name:T.file.name, fileSpeed:sp,
+    overwrite:$("cutOver").checked, ...adParams(), ...outParams()}));
 };
-
-// ---- tab sửa tag
-let T = {};
 document.querySelectorAll('input[name=cs]').forEach(r => r.onchange = () => {
   const v = document.querySelector('input[name=cs]:checked').value;
   $("tagYt").classList.toggle("hide", v !== "yt"); $("tagImgRow").classList.toggle("hide", v !== "image"); });
 $("tagLink").value = P.url;
-$("tagPick").onclick = () => pick("audio", r => { T.file = r; $("tagName").textContent = r.name;
-  $("tTitle").value = r.title || r.name.replace(/\.[^.]+$/, ""); $("tAlbum").value = r.album || "";
-  $("tArtist").value = r.artist || ""; $("tTrack").value = r.track || "";
-  $("tagPrev").style.backgroundImage = r.preview ? `url(${r.preview})` : ""; });
 $("tagImg").onclick = () => pick("image", r => { T.img = r; $("tagPrev").style.backgroundImage = r.preview ? `url(${r.preview})` : ""; });
 $("tagRun").onclick = () => {
   if (!T.file) return A.toast("Chọn file audio trước");
@@ -335,7 +374,7 @@ $("tagRun").onclick = () => {
     link:$("tagLink").value.trim(), index:parseInt($("tagIdx").value)||1, coverPath:T.img ? T.img.path : "",
     title:$("tTitle").value, album:$("tAlbum").value, artist:$("tArtist").value, track:$("tTrack").value,
     ...($("tGenre").value.trim() ? {genre:$("tGenre").value.trim()} : {}),
-    saveTree:P.saveTree, saveLabel:P.saveLabel || DEST }));
+    ...outParams() }));
 };
 
 // ---- chọn file qua app: kết quả trả về window.__onPick(id, obj)

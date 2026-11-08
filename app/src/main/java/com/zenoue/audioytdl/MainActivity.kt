@@ -200,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun info(): String = JSONObject().apply {
             put("app", runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "")
             put("ui", UiStore.source)
+            put("aacEnc", AacEncoder.describe())        // bộ mã hoá MediaCodec của máy (trống = APK cũ / không có)
             put("adsDir", if (AdStore.isPublic(this@MainActivity)) AdStore.LABEL else "bộ nhớ trong của app (không ghi được vào Download)")
         }.toString()
 

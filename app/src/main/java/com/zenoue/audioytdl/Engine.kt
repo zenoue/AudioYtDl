@@ -74,6 +74,7 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
             put("work", work.absolutePath)
             put("out", out.absolutePath)
             put("ads", AdStore.dir(ctx).absolutePath)
+            put("mediacodec", AacEncoder.best?.name ?: "")      // engine biết app mã hoá được bằng MediaCodec
         }
         val pf = File(ctx.cacheDir, "engine_params.json").apply { writeText(params.toString()) }
 
@@ -92,6 +93,11 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
         proc = pr
         if (cancelled) pr.destroy()
 
+        // MediaCodec: engine gửi "@@AAC id\tpcm\tout\trate\tch\tbitrate", app trả "AAC id ok|err …" qua stdin
+        val aacPool = java.util.concurrent.Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors())
+        val stdin = pr.outputStream.bufferedWriter()
+        fun reply(s: String) = synchronized(stdin) { runCatching { stdin.write(s + "\n"); stdin.flush() } }
+
         val saved = mutableListOf<String>()
         var error: String? = null
         val raw = ArrayDeque<String>()
@@ -108,6 +114,15 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
                 "STATUS" -> JobState.status.value = body
                 "PROGRESS" -> body.toDoubleOrNull()?.let { JobState.progress.value = (it * 1000).toInt() }
                 "ERROR" -> error = body
+                "AAC" -> {
+                    val f = body.split('\t')
+                    aacPool.execute {
+                        val res = try {
+                            AacEncoder.encode(File(f[1]), File(f[2]), f[3].toInt(), f[4].toInt(), f[5].toInt()); "ok"
+                        } catch (e: Throwable) { "err " + (e.message ?: e.javaClass.simpleName).replace('\n', ' ') }
+                        reply("AAC ${f[0]} $res")
+                    }
+                }
                 "FILE" -> {
                     val f = body.split('\t')
                     val src = File(f[0])
@@ -124,6 +139,7 @@ class Engine(private val ctx: Context, private val ui: JSONObject) {
             }
         }
         val code = pr.waitFor()
+        aacPool.shutdownNow()
         proc = null
         if (cancelled) throw CancelledByUser()
         error?.let { throw Exception(it) }

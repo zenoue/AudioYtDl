@@ -12,13 +12,16 @@ Giao tiếp với app qua stdout, mỗi dòng 1 lệnh:
   @@FILE <path>\t<name>\t<mime>[\t<đích>]   file kết quả -> app lưu rồi xoá.
                         đích: bỏ trống = thư mục lưu người dùng chọn; "uri:<content-uri>" = ghi đè file gốc
   @@ERROR <text>        lỗi (kết thúc)
+  @@AAC <id>\t<pcm>\t<out>\t<rate>\t<ch>\t<bitrate>   nhờ app mã hoá PCM s16le -> m4a bằng MediaCodec;
+                        app trả 1 dòng "AAC <id> ok|err <lý do>" vào stdin
 Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sang + đường dẫn app thêm vào.
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
+        | "speedFile" (tăng tốc 1 file có sẵn)
         | "addAd" (lấy mẫu quảng cáo từ 1 khoảng thời gian của video YouTube)
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.9"
+ENGINE_VERSION = "0.1.0"
 
 import collections
 import hashlib
@@ -172,6 +175,47 @@ def ffmpeg(args, on_time=None, low=False):
     check_cancel()
     if pr.returncode != 0:
         raise RuntimeError("ffmpeg lỗi (%d): %s" % (pr.returncode, " | ".join(tail)[:400]))
+
+
+# ---- mã hoá AAC bằng MediaCodec của máy (qua app): gửi @@AAC, chờ dòng trả lời trên stdin
+_AAC = {"next": 0, "wait": {}, "reader": None}
+_AAC_LOCK = threading.Lock()
+
+
+def _aac_reader():
+    for line in sys.stdin:
+        p = line.rstrip("\n").split(" ", 2)
+        if len(p) >= 2 and p[0] == "AAC":
+            with _AAC_LOCK:
+                w = _AAC["wait"].pop(p[1], None)
+            if w:
+                w[1].append(p[2] if len(p) > 2 else "")
+                w[0].set()
+
+
+def app_aac(pcm, out, rate=44100, ch=2, bitrate=128000):
+    with _AAC_LOCK:
+        if not _AAC["reader"]:
+            _AAC["reader"] = threading.Thread(target=_aac_reader, daemon=True)
+            _AAC["reader"].start()
+        _AAC["next"] += 1
+        rid = str(_AAC["next"])
+        ev, box = threading.Event(), []
+        _AAC["wait"][rid] = (ev, box)
+    emit("AAC", rid, pcm, out, rate, ch, bitrate)
+    while not ev.wait(0.5):
+        check_cancel()
+    if box[0] != "ok":
+        raise RuntimeError("MediaCodec: " + box[0])
+
+
+def encoder():
+    """fast | twoloop (ffmpeg AAC) | mediacodec (bộ mã hoá của máy, cần APK có hỗ trợ)."""
+    e = P.get("encoder") or ("fast" if P.get("fastAac", True) else "twoloop")
+    if e == "mediacodec" and not P.get("mediacodec"):
+        log("App chưa hỗ trợ MediaCodec (cần APK mới) → dùng ffmpeg AAC nhanh")
+        e = "fast"
+    return e if e in ("fast", "twoloop", "mediacodec") else "fast"
 
 
 def probe(path):
@@ -630,17 +674,19 @@ def cover_args(cover):
             "-metadata:s:v", "comment=Cover (front)"] if cover else []
 
 
-def speed_up(src, dur, wdir, g, ngroups):
-    """1 file đã ghép -> chia đều N đoạn (≈3 đoạn/nhân để nhân nhanh của CPU big.LITTLE nhận thêm việc),
-    CORES luồng song song: giải mã + atempo + AAC, nối lại bằng copy."""
+def speed_up(src, dur, wdir, g, ngroups, speed=None):
+    """1 file -> chia đều N đoạn (≈3 đoạn/nhân: CPU 1+3+4 nhân như Dimensity 9500s thì nhân lớn nhận thêm đoạn),
+    CORES luồng song song: giải mã + atempo (ffmpeg, ưu tiên thấp) + mã hoá AAC (ffmpeg hoặc MediaCodec), nối lại bằng copy."""
+    speed = speed or P["speed"]
     n = max(1, min(CORES * 3, math.ceil(dur / 40)))
     ln = dur / n
-    total_out = dur / P["speed"]
+    total_out = dur / speed
     done = {}
     t0 = time.time()
     last = [0.0]
-    flt = atempo(P["speed"])
-    coder = "fast" if P.get("fastAac", True) else "twoloop"
+    flt = atempo(speed)
+    coder = encoder()
+    mc_bad = []                                  # MediaCodec lỗi 1 lần -> các đoạn sau dùng ffmpeg
     ui(enc="Tăng tốc %d/%d…" % (g + 1, ngroups))
     parts = [os.path.join(wdir, "sp_%d_%02d.m4a" % (g, i)) for i in range(n)]
 
@@ -653,8 +699,22 @@ def speed_up(src, dur, wdir, g, ngroups):
                 d = sum(done.values())
                 ui(enc="Tăng tốc %d/%d: %.0f%% · %.0fx realtime" % (g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1)),
                    p_enc=(g + 0.9 * d / total_out) / ngroups)
-        ffmpeg(["-threads", "1", "-ss", "%.3f" % (i * ln), "-t", "%.3f" % ln, "-i", src, "-vn", "-af", flt,
-                "-c:a", "aac", "-aac_coder", coder, "-b:a", "128k", parts[i]], on_t, low=True)
+        inp = ["-threads", "1", "-ss", "%.3f" % (i * ln), "-t", "%.3f" % ln, "-i", src, "-vn", "-af", flt]
+        if coder == "mediacodec" and not mc_bad:
+            pcm = parts[i][:-4] + ".pcm"
+            try:
+                ffmpeg(inp + ["-f", "s16le", "-ac", "2", "-ar", "44100", pcm], on_t, low=True)
+                app_aac(pcm, parts[i])
+                return
+            except Cancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                if not mc_bad: log("MediaCodec lỗi → ffmpeg AAC nhanh (%s)" % short(e))
+                mc_bad.append(1)
+            finally:
+                if os.path.exists(pcm): os.remove(pcm)
+        ffmpeg(inp + ["-c:a", "aac", "-aac_coder", "twoloop" if coder == "twoloop" else "fast", "-b:a", "128k", parts[i]],
+               on_t, low=True)
 
     with ThreadPoolExecutor(max_workers=min(n, CORES)) as ex:
         list(ex.map(job, range(n)))
@@ -663,8 +723,10 @@ def speed_up(src, dur, wdir, g, ngroups):
     out = os.path.join(wdir, "sped_%d.m4a" % g)
     ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out])
     for x in parts: os.remove(x)
-    log("Tăng tốc %.0f phút audio: %.1fs (%.0fx realtime, AAC %s, %d đoạn)" % (
-        total_out / 60, secs(t0), total_out / max(secs(t0), 0.1), coder, n))
+    name = {"fast": "ffmpeg AAC nhanh", "twoloop": "ffmpeg AAC chất lượng",
+            "mediacodec": "MediaCodec %s" % P.get("mediacodec")}[coder] + (" (một phần ffmpeg)" if mc_bad else "")
+    log("Tăng tốc ×%g %.0f phút audio: %.1fs (%.0fx realtime, %s, %d đoạn)" % (
+        speed, total_out / 60, secs(t0), total_out / max(secs(t0), 0.1), name, n))
     return out
 
 
@@ -902,6 +964,31 @@ MIME = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "mp4": "audio/mp4", "opus": "au
         "flac": "audio/flac", "wav": "audio/wav", "mka": "audio/x-matroska", "webm": "audio/webm"}
 
 
+def speed_file_mode():
+    """Tăng tốc 1 file có sẵn -> m4a, giữ ảnh bìa + thông tin. Ghi đè file gốc chỉ khi gốc là m4a/m4b/mp4."""
+    src = P["input"]
+    sp = float(P.get("fileSpeed") or 0)
+    if not 0.5 <= sp <= 4 or abs(sp - 1) < 0.005: raise RuntimeError("Tốc độ nên trong khoảng 0.5 – 4 (khác 1)")
+    wdir = os.path.join(P["work"], "speed")
+    shutil.rmtree(wdir, ignore_errors=True)
+    os.makedirs(wdir, exist_ok=True)
+    os.makedirs(P["out"], exist_ok=True)
+    dur, _, pic = probe(src)
+    if dur <= 0: raise RuntimeError("Không đọc được thời lượng file")
+    audio = speed_up(src, dur, wdir, 0, 1, sp)
+    name = P.get("name") or os.path.basename(src)
+    stem, ext = os.path.splitext(name)
+    over = P.get("overwrite") and P.get("inputUri") and ext.lower() in (".m4a", ".m4b", ".mp4")
+    if P.get("overwrite") and not over: log("File gốc không phải m4a → lưu bản mới thay vì ghi đè")
+    if not over: name = "%s_x%g.m4a" % (stem, sp)
+    out = os.path.join(P["out"], "sped.m4a")
+    args = ["-i", audio, "-i", src, "-map", "0:a"] + (["-map", "1:v"] if pic else [])
+    args += ["-map_metadata", "1", "-c", "copy"] + (["-disposition:v", "attached_pic"] if pic else [])
+    ffmpeg(args + [out])
+    emit("FILE", out, name, "audio/mp4", ("uri:" + P["inputUri"]) if over else "")
+    progress(1.0)
+
+
 def tag_mode():
     """Gắn ảnh bìa + thông tin cho 1 file có sẵn (chỉ copy, không mã hoá lại)."""
     src = P["input"]
@@ -951,7 +1038,7 @@ def tag_mode():
 
 if __name__ == "__main__":
     try:
-        {"tag": tag_mode, "addAd": add_ad_mode, "cutAds": cut_ads_mode}.get(P.get("mode"), main)()
+        {"tag": tag_mode, "addAd": add_ad_mode, "cutAds": cut_ads_mode, "speedFile": speed_file_mode}.get(P.get("mode"), main)()
     except Cancelled:
         emit("ERROR", "Đã dừng")
         quit_now(130)
