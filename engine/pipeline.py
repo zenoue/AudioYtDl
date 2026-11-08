@@ -18,7 +18,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
         | "cutAds" (cắt mọi đoạn giống mẫu trong 1 file có sẵn)
 """
 ENGINE_API = 3          # phải khớp Engine.ENGINE_API trong app
-ENGINE_VERSION = "0.0.8"
+ENGINE_VERSION = "0.0.9"
 
 import collections
 import hashlib
@@ -184,23 +184,6 @@ def probe(path):
     return dur, (c[1] if c else ""), " Video: " in r.stdout
 
 
-# ---------------------------------------------------------------- trạng thái lưu giữa các lần chạy
-STATE_FILE = os.path.join(P["work"], "state.json")
-
-
-def state_get(k, d=None):
-    try: return json.load(open(STATE_FILE)).get(k, d)
-    except Exception: return d
-
-
-def state_set(k, v):
-    try: s = json.load(open(STATE_FILE))
-    except Exception: s = {}
-    s[k] = v
-    os.makedirs(P["work"], exist_ok=True)
-    json.dump(s, open(STATE_FILE, "w"))
-
-
 # ---------------------------------------------------------------- yt-dlp
 def P_get(k, d=None):
     v = P.get(k)
@@ -261,11 +244,10 @@ def list_entries():
 # ---- tải: lấy thông tin lần lượt (chậm rãi như YTDLnis, tránh bị coi là bot), truyền dữ liệu song song
 EXTRACT_SEM = threading.Semaphore(1)
 BOT = threading.Event()
-FAST_KEY = "fast_fail_at"
-
-
-def fast_allowed():
-    return time.time() - (state_get(FAST_KEY, 0) or 0) > 24 * 3600
+# Chế độ nhanh = client visionos (không cần JS/QuickJS, ~3 lần nhanh hơn). Video nào lỗi thì riêng video đó dùng chế độ
+# đầy đủ; chỉ khi lỗi liên tiếp FAST_MAX_FAILS video mới tắt chế độ nhanh cho tới hết lần chạy này (không khoá lâu dài).
+FAST_MAX_FAILS = 3
+FAST = {"fails": 0, "off": False}
 
 
 def download_all(entries, wdir, on_done):
@@ -313,27 +295,33 @@ def download_all(entries, wdir, on_done):
             opts["external_downloader_args"] = {"aria2c": ["--console-log-level=error",
                                                            "--ca-certificate=" + P["cert"]]}
         t1 = time.time()
-        fast = fast_allowed() and not P["url"].startswith("file://")
+        fast = not FAST["off"] and not P["url"].startswith("file://")
         info = None
         while info is None:
             check_cancel()
             if BOT.is_set():
                 return
             o = dict(opts)
-            if fast:   # client visionos: không cần chạy JavaScript (bỏ bước QuickJS chậm)
-                o["extractor_args"] = {"youtube": {"player_client": ["visionos"]}}
             with EXTRACT_SEM:
                 if not first_req[0]:
                     time.sleep(1 + random.random() * 2)   # nghỉ 1–3 s giữa các lần hỏi YouTube
                 first_req[0] = False
+                fast = fast and not FAST["off"]           # có thể vừa bị tắt trong lúc chờ lượt
+                # nhanh: chỉ visionos; đầy đủ: client mặc định trừ visionos (vừa lỗi) -> bớt 1 lần hỏi
+                o["extractor_args"] = {"youtube": {"player_client": ["visionos"] if fast else ["default", "-visionos"]}}
+                t1 = time.time()                          # chỉ tính thời gian hỏi YouTube (không tính lúc chờ lượt)
                 try:
                     with yt_dlp.YoutubeDL(o) as y:
                         info = y.extract_info(e["url"], download=False)
+                    if fast: FAST["fails"] = 0
                 except Exception as ex:   # noqa: BLE001
                     if fast:
                         fast = False
-                        state_set(FAST_KEY, time.time())
-                        log("%s Lấy thông tin nhanh lỗi → chế độ đầy đủ (%s)" % (tag, short(ex)))
+                        FAST["fails"] += 1
+                        if FAST["fails"] >= FAST_MAX_FAILS and not FAST["off"]:
+                            FAST["off"] = True
+                            log("Chế độ nhanh lỗi %d video liền → dùng chế độ đầy đủ tới hết lần chạy này" % FAST_MAX_FAILS)
+                        log("%s Lấy thông tin nhanh lỗi → video này dùng chế độ đầy đủ (%s)" % (tag, short(ex)))
                         continue
                     if is_bot(str(ex)):
                         if not BOT.is_set():
