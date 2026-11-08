@@ -232,6 +232,13 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun adFiles(): String = org.json.JSONArray(AdStore.list(this@MainActivity)).toString()
         @JavascriptInterface fun adDelete(name: String) = AdStore.delete(this@MainActivity, name)
 
+        /** Copy chữ vào clipboard (nút Copy ở nhật ký). */
+        @JavascriptInterface fun copy(text: String) = runOnUiThread {
+            (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                .setPrimaryClip(android.content.ClipData.newPlainText("Nhật ký Audio YtDl", text))
+            if (Build.VERSION.SDK_INT < 33) this@MainActivity.toast("Đã copy nhật ký")   // Android 13+ tự báo
+        }
+
         @JavascriptInterface fun toast(msg: String) = runOnUiThread { this@MainActivity.toast(msg) }
         @JavascriptInterface fun checkUpdate() = runOnUiThread { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
     }

@@ -9,7 +9,7 @@
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 2, UI_VERSION = "0.0.5";</script>
+<script>const UI_API = 2, UI_VERSION = "0.0.6";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -40,7 +40,9 @@ h3{font-size:13px;font-weight:600;margin:12px 0 0}
 .bar{height:4px;background:#1e1e1e;border-radius:2px;margin-top:8px;overflow:hidden}
 .bar>div{height:100%;width:0;background:var(--acc);transition:width .3s}
 #status{font-weight:600;font-size:13px;margin-top:5px;min-height:18px}
-.log{flex:1;min-height:120px;margin-top:8px;background:var(--card);border:1px solid #222;border-radius:10px;padding:10px;overflow:auto;
+.logw{position:relative;flex:1;min-height:120px;margin-top:8px;display:flex}
+.logw .copy{position:absolute;top:6px;right:6px;background:#1e1e1e;border:1px solid var(--line);color:var(--text);border-radius:6px;padding:4px 10px;font-size:12px}
+.log{flex:1;background:var(--card);border:1px solid #222;border-radius:10px;padding:10px;overflow:auto;
   font:11px/1.45 ui-monospace,Menlo,monospace;color:#b5b5b5;white-space:pre-wrap;word-break:break-word;user-select:text}
 .hide{display:none!important}
 button:disabled,input:disabled{opacity:.4}
@@ -160,7 +162,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
 
 <div class="bar"><div id="bar"></div></div>
 <div id="status"></div>
-<div class="log" id="log" data-ph="Nhật ký"></div>
+<div class="logw"><div class="log" id="log" data-ph="Nhật ký"></div><button class="copy" id="logCopy">Copy</button></div>
 
 <script>
 const A = window.App || {   // chạy thử trên trình duyệt máy tính
@@ -351,6 +353,15 @@ window.__onState = s => {
   $("bar").style.width = ((s.progress || 0) / 10) + "%";
   if (s.log !== lastLog) { const el = $("log"), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
     el.textContent = lastLog = s.log || ""; if (atEnd) el.scrollTop = el.scrollHeight; }
+};
+// ---- copy nhật ký: qua app (APK mới) hoặc clipboard của WebView
+$("logCopy").onclick = () => {
+  const text = $("log").textContent;
+  if (!text) return A.toast("Nhật ký trống");
+  if (A.copy) return A.copy(text);
+  const old = () => { const t = document.createElement("textarea"); t.value = text; document.body.appendChild(t); t.select();
+    const ok = document.execCommand("copy"); t.remove(); A.toast(ok ? "Đã copy nhật ký" : "Không copy được"); };
+  (navigator.clipboard ? navigator.clipboard.writeText(text).then(() => A.toast("Đã copy nhật ký"), old) : old());
 };
 window.__onShare = text => { const m = /https?:\/\/\S+/.exec(text || ""); if (m && !running) { $("url").value = P.url = m[0]; save(); tab("dl"); } };
 
